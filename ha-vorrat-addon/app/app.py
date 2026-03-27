@@ -41,11 +41,18 @@ class Einkaufsliste(db.Model):
     name = db.Column(db.String(100), nullable=False)
     menge = db.Column(db.Float, default=1)
     einheit = db.Column(db.String(20), default="Stück")
-    preis = db.Column(db.Float, nullable=True)
+    einzelpreis = db.Column(db.Float, nullable=True)  # Preis pro Einheit
     erledigt = db.Column(db.Boolean, default=False)
     in_bestand = db.Column(db.Boolean, default=False)
     position = db.Column(db.Integer, default=0)
     hinzugefuegt = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @property
+    def gesamtpreis(self):
+        """Einzelpreis × Menge."""
+        if self.einzelpreis is not None:
+            return round(self.einzelpreis * self.menge, 2)
+        return None
 
 
 class Rezept(db.Model):
@@ -409,7 +416,7 @@ def einkauf_liste(liste_id):
     unter_mindest = Produkt.query.filter(Produkt.menge < Produkt.mindestmenge).all()
     offene = Einkaufsliste.query.filter_by(liste_id=liste_id, erledigt=False).order_by(Einkaufsliste.position, Einkaufsliste.hinzugefuegt).all()
     erledigte = Einkaufsliste.query.filter_by(liste_id=liste_id, erledigt=True).all()
-    gesamtpreis = sum(i.preis or 0 for i in offene + erledigte)
+    gesamtpreis = sum(i.gesamtpreis or 0 for i in offene + erledigte)
     einkauf_count = EinkaufsListe.query.count()
     return render_template("einkauf.html",
         liste=liste, alle_listen=alle_listen,
@@ -431,14 +438,14 @@ def einkauf_liste_loeschen(liste_id):
 def einkauf_hinzufuegen(liste_id):
     name = request.form.get("name", "").strip()
     if name:
-        preis_str = request.form.get("preis", "").strip()
-        preis = float(preis_str.replace(",", ".")) if preis_str else None
+        preis_str = request.form.get("einzelpreis", "").strip()
+        einzelpreis = float(preis_str.replace(",", ".")) if preis_str else None
         e = Einkaufsliste(
             liste_id=liste_id,
             name=name,
             menge=float(request.form.get("menge", 1)),
             einheit=request.form.get("einheit", "Stück"),
-            preis=preis
+            einzelpreis=einzelpreis
         )
         db.session.add(e)
         db.session.commit()
@@ -465,10 +472,10 @@ def einkauf_erledigt(id):
     e.erledigt = True
     liste_id = e.liste_id
     # Preis aktualisieren falls angegeben
-    preis_str = request.form.get("preis", "").strip()
+    preis_str = request.form.get("einzelpreis", "").strip()
     if preis_str:
         try:
-            e.preis = float(preis_str.replace(",", "."))
+            e.einzelpreis = float(preis_str.replace(",", "."))
         except: pass
     # Optional: in Bestand buchen
     if request.form.get("in_bestand"):
@@ -541,6 +548,28 @@ def einkauf_loeschen(id):
     db.session.commit()
     return redirect(url_for("einkauf_liste", liste_id=liste_id))
 
+@app.route("/einkauf/liste/<int:liste_id>/alle_buchen", methods=["POST"])
+def einkauf_alle_buchen(liste_id):
+    """Alle erledigten Artikel auf einmal in Bestand buchen."""
+    erledigte = Einkaufsliste.query.filter_by(liste_id=liste_id, erledigt=True, in_bestand=False).all()
+    gebucht = 0
+    neu_angelegt = 0
+    for e in erledigte:
+        p = Produkt.query.filter(Produkt.name.ilike(f"%{e.name}%")).first()
+        if p:
+            p.menge += e.menge
+            e.in_bestand = True
+            gebucht += 1
+        else:
+            neu = Produkt(name=e.name, menge=e.menge, einheit=e.einheit,
+                         mindestmenge=e.menge, kategorie="Nicht zugeordnet", lagerort="")
+            db.session.add(neu)
+            e.in_bestand = True
+            neu_angelegt += 1
+    db.session.commit()
+    flash(f"{gebucht} Artikel gebucht, {neu_angelegt} neu angelegt.", "success")
+    return redirect(url_for("einkauf_liste", liste_id=liste_id))
+
 @app.route("/einkauf/liste/<int:liste_id>/leeren", methods=["POST"])
 def einkauf_leeren(liste_id):
     Einkaufsliste.query.filter_by(liste_id=liste_id, erledigt=True).delete()
@@ -551,9 +580,9 @@ def einkauf_leeren(liste_id):
 @app.route("/einkauf/item/<int:id>/preis", methods=["POST"])
 def einkauf_preis(id):
     e = Einkaufsliste.query.get_or_404(id)
-    preis_str = request.form.get("preis", "").strip()
+    preis_str = request.form.get("einzelpreis", "").strip()
     try:
-        e.preis = float(preis_str.replace(",", ".")) if preis_str else None
+        e.einzelpreis = float(preis_str.replace(",", ".")) if preis_str else None
     except: pass
     db.session.commit()
     return redirect(url_for("einkauf_liste", liste_id=e.liste_id))
@@ -1260,6 +1289,11 @@ def db_migrieren():
             if not spalte_existiert("einkaufsliste", "preis"):
                 cur.execute("ALTER TABLE einkaufsliste ADD COLUMN preis FLOAT")
                 conn.commit()
+            if not spalte_existiert("einkaufsliste", "einzelpreis"):
+                cur.execute("ALTER TABLE einkaufsliste ADD COLUMN einzelpreis FLOAT")
+                # Bestehende preis-Werte als einzelpreis übernehmen (geteilt durch Menge)
+                cur.execute("UPDATE einkaufsliste SET einzelpreis = preis WHERE preis IS NOT NULL AND menge > 0")
+                conn.commit()
             if not spalte_existiert("einkaufsliste", "in_bestand"):
                 cur.execute("ALTER TABLE einkaufsliste ADD COLUMN in_bestand BOOLEAN DEFAULT 0")
                 conn.commit()
@@ -1279,6 +1313,102 @@ def db_migrieren():
 
         conn.close()
 
+# ── HA Sensor Integration ─────────────────────────────────────────────────────
+
+def ha_sensoren_aktualisieren():
+    """Schreibt Vorrats-Statistiken als Sensoren in Home Assistant."""
+    import threading, time
+
+    SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+    HA_URL = "http://supervisor/core/api"
+
+    if not SUPERVISOR_TOKEN:
+        return  # Nicht in HA-Umgebung
+
+    def sensor_setzen(entity_id, state, attributes=None):
+        try:
+            requests.post(
+                f"{HA_URL}/states/{entity_id}",
+                headers={
+                    "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+                    "Content-Type": "application/json"
+                },
+                json={"state": str(state), "attributes": attributes or {}},
+                timeout=5
+            )
+        except Exception as e:
+            print(f"HA Sensor Fehler ({entity_id}): {e}", flush=True)
+
+    def update_loop():
+        time.sleep(10)  # Warten bis Flask gestartet ist
+        while True:
+            try:
+                with app.app_context():
+                    heute = date.today()
+                    in_7_tagen = heute + timedelta(days=7)
+                    in_3_tagen = heute + timedelta(days=3)
+
+                    alle = Produkt.query.all()
+
+                    # Abgelaufen
+                    abgelaufen = [p for p in alle if p.mhd and p.mhd < heute]
+                    # Bald ablaufend (≤7 Tage)
+                    bald = [p for p in alle if p.mhd and heute <= p.mhd <= in_7_tagen]
+                    # Kritisch (≤3 Tage)
+                    kritisch = [p for p in alle if p.mhd and heute <= p.mhd <= in_3_tagen]
+                    # Unter Mindestmenge
+                    unter_min = [p for p in alle if p.menge < p.mindestmenge]
+
+                    # Sensor: Abgelaufen
+                    sensor_setzen("sensor.vorrat_abgelaufen", len(abgelaufen), {
+                        "friendly_name": "Vorrat: Abgelaufen",
+                        "unit_of_measurement": "Produkte",
+                        "icon": "mdi:food-off",
+                        "produkte": [{"name": p.name, "mhd": str(p.mhd)} for p in abgelaufen[:10]]
+                    })
+
+                    # Sensor: Bald ablaufend
+                    sensor_setzen("sensor.vorrat_bald_ablaufend", len(bald), {
+                        "friendly_name": "Vorrat: Bald ablaufend",
+                        "unit_of_measurement": "Produkte",
+                        "icon": "mdi:food-clock",
+                        "produkte": [{"name": p.name, "mhd": str(p.mhd), "tage": (p.mhd - heute).days} for p in bald[:10]]
+                    })
+
+                    # Sensor: Kritisch (≤3 Tage)
+                    sensor_setzen("sensor.vorrat_kritisch", len(kritisch), {
+                        "friendly_name": "Vorrat: Kritisch (≤3 Tage)",
+                        "unit_of_measurement": "Produkte",
+                        "icon": "mdi:food-alert",
+                        "produkte": [{"name": p.name, "mhd": str(p.mhd), "tage": (p.mhd - heute).days} for p in kritisch[:10]]
+                    })
+
+                    # Sensor: Unter Mindestmenge
+                    sensor_setzen("sensor.vorrat_unter_mindestmenge", len(unter_min), {
+                        "friendly_name": "Vorrat: Unter Mindestmenge",
+                        "unit_of_measurement": "Produkte",
+                        "icon": "mdi:package-down",
+                        "produkte": [{"name": p.name, "menge": p.menge, "mindestmenge": p.mindestmenge, "einheit": p.einheit} for p in unter_min[:10]]
+                    })
+
+                    # Sensor: Gesamt Produkte
+                    sensor_setzen("sensor.vorrat_gesamt", len(alle), {
+                        "friendly_name": "Vorrat: Gesamt",
+                        "unit_of_measurement": "Produkte",
+                        "icon": "mdi:food-apple",
+                    })
+
+                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min.", flush=True)
+
+            except Exception as e:
+                print(f"HA Update Fehler: {e}", flush=True)
+
+            time.sleep(300)  # alle 5 Minuten aktualisieren
+
+    t = threading.Thread(target=update_loop, daemon=True)
+    t.start()
+
 if __name__ == "__main__":
     db_migrieren()
+    ha_sensoren_aktualisieren()
     app.run(host="0.0.0.0", port=5000, debug=False)

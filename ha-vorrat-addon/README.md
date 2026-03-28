@@ -86,6 +86,9 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 
 ## 📝 Changelog
 
+### 1.2.1
+- Drag & Drop Sortierung in Einkaufslisten repariert
+
 ### 1.2.0
 - Dashboard-Sensoren für HA (abgelaufen, bald ablaufend, unter Mindestmenge)
 - Einzelpreis × Menge Berechnung in Einkaufslisten
@@ -104,5 +107,4 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 - Mehrere Einkaufslisten mit Preisen
 - Rezepte mit PDF- und Web-Import
 
- ### 1.2.1
-- Drag & Drop Sortierung in Einkaufslisten repariert
+ 

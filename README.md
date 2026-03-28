@@ -103,3 +103,6 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 - Vorratsverwaltung mit MHD-Warnungen
 - Mehrere Einkaufslisten mit Preisen
 - Rezepte mit PDF- und Web-Import
+
+### 1.2.1
+- Drag & Drop Sortierung in Einkaufslisten repariert

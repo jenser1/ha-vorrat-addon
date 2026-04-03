@@ -35,9 +35,15 @@
   {% if ergebnis %}
 
   {% if ergebnis.quelle == 'schema.org' %}
-  <div class="alert alert-success">✅ Rezept automatisch erkannt (Schema.org)</div>
+  <div class="alert alert-success">✅ Rezept automatisch erkannt – bitte prüfen und speichern.</div>
+  {% elif ergebnis.quelle == 'lidl' %}
+  <div class="alert alert-warning">
+    ⚠️ <strong>Lidl lädt Zutaten per JavaScript nach</strong> – diese können leider nicht automatisch importiert werden.
+    Anleitung wurde importiert. Bitte Zutaten manuell aus der Lidl-Seite übertragen.
+    <a href="{{ url }}" target="_blank" style="color:inherit; font-weight:600;">Lidl-Seite öffnen →</a>
+  </div>
   {% else %}
-  <div class="alert alert-warning">⚠️ Rezept teilweise erkannt ({{ ergebnis.quelle }}) – bitte prüfen.</div>
+  <div class="alert alert-warning">⚠️ Rezept teilweise erkannt – bitte fehlende Felder ergänzen.</div>
   {% endif %}
 
   {% if debug %}
@@ -54,6 +60,7 @@
   {% endif %}
 
   <form method="post" action="{{ url_for('rezept_neu') }}">
+    <input type="hidden" name="quell_url" value="{{ url }}">
 
     <!-- Grunddaten -->
     <div class="card">

@@ -1,5 +1,8 @@
-[README.md](https://github.com/user-attachments/files/26455919/README.md)
+[README.md](https://github.com/user-attachments/files/26456917/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
+
+[![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
+[![GitHub stars](https://img.shields.io/github/stars/jenser1/ha-vorrat-addon?style=social)](https://github.com/jenser1/ha-vorrat-addon)
 
 Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezepten, Einkaufslisten, Web-Import und Dashboard-Sensoren.
 

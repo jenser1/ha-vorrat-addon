@@ -62,6 +62,7 @@ class Rezept(db.Model):
     anleitung = db.Column(db.Text, default="")
     portionen = db.Column(db.Integer, default=4)
     kategorie = db.Column(db.String(50), default="Sonstiges")
+    quell_url = db.Column(db.String(500), default="")
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
     zutaten = db.relationship("RezeptZutat", backref="rezept", lazy=True, cascade="all, delete-orphan")
 
@@ -619,12 +620,15 @@ def rezepte():
 def rezept_neu():
     einkauf_count = EinkaufsListe.query.count()
     if request.method == "POST":
+        quell_url = request.form.get("quell_url", "").strip()
+        print(f"DEBUG rezept_neu: quell_url='{quell_url}'", flush=True)
         r = Rezept(
             name=request.form["name"],
             beschreibung=request.form.get("beschreibung", ""),
             anleitung=request.form.get("anleitung", ""),
             portionen=int(request.form.get("portionen", 4)),
             kategorie=request.form.get("kategorie", "Sonstiges"),
+            quell_url=quell_url,
         )
         db.session.add(r)
         db.session.flush()
@@ -993,46 +997,98 @@ def kaufland_extrahieren(soup):
     ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
     return ergebnis
 
-def lidl_extrahieren(soup):
-    """Spezifischer Parser für lidl-kochen.de."""
+def lidl_api_abrufen(url):
+    """Ruft Lidl Rezept direkt über die API ab."""
+    # Rezept-ID aus URL extrahieren – letzte Zahl in der URL
+    alle_ids = re.findall(r"(\d{4,8})", url)
+    if not alle_ids:
+        print("  Lidl: Keine ID in URL gefunden", flush=True)
+        return None
+    recipe_id = alle_ids[-1]  # letzte Zahl nehmen
+
+    # Alle bekannten API-Pfade probieren
+    api_pfade = [
+        f"https://www.lidl-kochen.de/api/recipes/{recipe_id}",
+        f"https://www.lidl-kochen.de/api/v2/recipes/{recipe_id}",
+        f"https://www.lidl-kochen.de/api/recipe/{recipe_id}",
+        f"https://www.lidl-kochen.de/api/v1/recipes/{recipe_id}",
+        f"https://www.lidl-kochen.de/api/recipes/{recipe_id}?locale=de_DE",
+    ]
+
+    headers_api = {**HEADERS, "Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
+
+    for api_url in api_pfade:
+        print(f"  Lidl API Versuch: {api_url}", flush=True)
+        try:
+            resp = requests.get(api_url, headers=headers_api, timeout=10)
+            print(f"  Lidl API Status: {resp.status_code}", flush=True)
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"  Lidl API OK! Keys: {list(data.keys()) if isinstance(data, dict) else 'Liste'}", flush=True)
+                return data
+        except Exception as e:
+            print(f"  Lidl API Fehler: {e}", flush=True)
+    return None
+
+def lidl_extrahieren(soup, url=""):
+    """Spezifischer Parser für lidl-kochen.de – nutzt API für Zutaten."""
     ergebnis = {"titel": "", "beschreibung": "", "portionen": 4,
                 "zutaten": [], "anleitung": "", "quelle": "lidl"}
 
-    # Titel
-    for sel in ["h1", ".recipe-title", "[class*=recipe-name]"]:
+    # Titel aus HTML
+    for sel in ["h1", ".recipe-detail-data h1", ".recipe__h1"]:
         el = soup.select_one(sel)
         if el:
             ergebnis["titel"] = el.get_text(strip=True)
             break
 
-    # Portionen
-    for el in soup.select("[class*=portion], [class*=serving], [class*=yield]"):
-        m = re.search(r"(\d+)", el.get_text())
-        if m:
-            ergebnis["portionen"] = int(m.group(1))
+    # Beschreibung aus Meta-Tag
+    for attr in [{"property": "og:description"}, {"name": "description"}]:
+        meta = soup.find("meta", attrs=attr)
+        if meta and meta.get("content"):
+            ergebnis["beschreibung"] = meta["content"][:250].strip()
             break
 
-    # Zutaten
-    for li in soup.select("[class*=ingredient] li, [class*=zutat] li, .ingredients li"):
-        text = li.get_text(strip=True)
-        if text and len(text) > 1:
-            menge, einheit, name = zutat_parsen(text)
-            ergebnis["zutaten"].append({"name": name, "menge": menge, "einheit": einheit})
+    # Anleitung aus HTML (funktioniert bereits)
+    schritte = [el.get_text(strip=True)
+                for el in soup.select(".preparation__step-content-text")
+                if len(el.get_text(strip=True)) > 10]
+    if schritte:
+        ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
 
-    # Anleitung
-    schritte = []
-    for el in soup.select("[class*=step] p, [class*=instruction] p, [class*=direction] p, "
-                          "[class*=zubereitung] p, [class*=preparation] p"):
-        text = el.get_text(strip=True)
-        if text and len(text) > 10:
-            schritte.append(text)
-    if not schritte:
-        for li in soup.select("[class*=step] li, [class*=instruction] li"):
-            text = li.get_text(strip=True)
-            if text:
-                schritte.append(text)
+    # Zutaten via API
+    api_data = lidl_api_abrufen(url) if url else None
+    if api_data:
+        print(f"  Lidl API Antwort Keys: {list(api_data.keys()) if isinstance(api_data, dict) else type(api_data)}", flush=True)
+        # Portionen
+        for key in ["portions", "servings", "portionen", "persons"]:
+            if key in api_data:
+                try:
+                    ergebnis["portionen"] = int(api_data[key])
+                except: pass
+                break
+        # Zutaten aus API
+        zutaten_roh = api_data.get("ingredients", api_data.get("ingredientGroups", []))
+        if isinstance(zutaten_roh, list):
+            for z in zutaten_roh:
+                if isinstance(z, dict):
+                    # Direkte Zutaten
+                    name = z.get("name", z.get("ingredientName", ""))
+                    menge = z.get("quantity", z.get("amount", 1)) or 1
+                    einheit = z.get("unit", z.get("unitName", "Stück")) or "Stück"
+                    if name:
+                        ergebnis["zutaten"].append({"name": name, "menge": float(menge), "einheit": einheit})
+                    # Gruppen mit Sub-Zutaten
+                    for sub in z.get("ingredients", []):
+                        if isinstance(sub, dict):
+                            name = sub.get("name", sub.get("ingredientName", ""))
+                            menge = sub.get("quantity", sub.get("amount", 1)) or 1
+                            einheit = sub.get("unit", sub.get("unitName", "Stück")) or "Stück"
+                            if name:
+                                ergebnis["zutaten"].append({"name": name, "menge": float(menge), "einheit": einheit})
+        if api_data.get("title") and not ergebnis["titel"]:
+            ergebnis["titel"] = api_data["title"]
 
-    ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
     return ergebnis
 
 def rezept_von_url(url):
@@ -1072,6 +1128,22 @@ def rezept_von_url(url):
         print(f"  cooking-descriptions gefunden: {len(descs)}", flush=True)
         for i, d in enumerate(descs, 1):
             print(f"    Desc {i}: {d.get_text(strip=True)[:100]}", flush=True)
+    if "lidl" in url.lower():
+        # ingredient__name__text direkt testen
+        namen = soup.select(".ingredient__name__text")
+        print(f"  ingredient__name__text: {len(namen)} gefunden", flush=True)
+        for n in namen[:5]:
+            print(f"    Name: {n.get_text(strip=True)[:60]}", flush=True)
+        # ingredients-table Zeilen
+        zeilen = soup.select(".ingredients-table tr")
+        print(f"  ingredients-table tr: {len(zeilen)}", flush=True)
+        for z in zeilen[:5]:
+            print(f"    Zeile: {z.get_text(strip=True)[:80]}", flush=True)
+        # ingredients__data
+        data_els = soup.select(".ingredients__data")
+        print(f"  ingredients__data: {len(data_els)}", flush=True)
+        for d in data_els[:3]:
+            print(f"    Data: {d.get_text(strip=True)[:80]}", flush=True)
 
     def beschreibung_ergaenzen(ergebnis, soup):
         """Ergänzt leere Beschreibung aus Meta-Tags."""
@@ -1094,7 +1166,7 @@ def rezept_von_url(url):
     elif "lidl-kochen" in domain or "lidl.de" in domain:
         ergebnis = schema_org_extrahieren(soup)
         if not ergebnis or not ergebnis.get("zutaten"):
-            ergebnis = lidl_extrahieren(soup)
+            ergebnis = lidl_extrahieren(soup, url)
         if ergebnis and ergebnis.get("titel"):
             return beschreibung_ergaenzen(ergebnis, soup), None
 
@@ -1310,6 +1382,12 @@ def db_migrieren():
             )""")
             cur.execute("INSERT INTO einstellungen (sprache, waehrung) VALUES ('de', 'EUR')")
             conn.commit()
+
+        if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):
+            print("Migration: Füge quell_url Spalte hinzu...", flush=True)
+            cur.execute("ALTER TABLE rezept ADD COLUMN quell_url VARCHAR(500) DEFAULT ''")
+            conn.commit()
+            print("Migration quell_url: OK", flush=True)
 
         conn.close()
 

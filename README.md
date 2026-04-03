@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/26322702/README.md)
+[README.md](https://github.com/user-attachments/files/26455894/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezepten, Einkaufslisten, Web-Import und Dashboard-Sensoren.
@@ -85,6 +85,10 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 ---
 
 ## 📝 Changelog
+
+### 1.2.2
+- Quell-URL wird beim Web-Import gespeichert
+- 🌐 Originalrezept öffnen Link im Rezept-Detail
 
 ### 1.2.1
 - Drag & Drop Sortierung in Einkaufslisten repariert

@@ -1,0 +1,21 @@
+name: "Vorratsverwaltung"
+description: "Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import"
+version: "1.2.2"
+slug: "vorratsverwaltung"
+url: "https://github.com/jenser1/ha-vorrat-addon"
+arch:
+  - aarch64
+  - amd64
+  - armv7
+  - armhf
+startup: application
+boot: auto
+map:
+  - share:rw
+ingress: true
+ingress_port: 5000
+panel_icon: mdi:food-apple
+panel_title: Vorratsverwaltung
+hassio_api: true
+hassio_role: default
+homeassistant_api: true

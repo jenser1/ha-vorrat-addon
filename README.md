@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/26481065/README.md)
+[README.md](https://github.com/user-attachments/files/26481067/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezepten, Einkaufslisten, Web-Import und Dashboard-Sensoren.

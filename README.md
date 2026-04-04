@@ -1,8 +1,5 @@
-[README.md](https://github.com/user-attachments/files/26456917/README.md)
+[README.md](https://github.com/user-attachments/files/26481335/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
-
-[![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
-[![GitHub stars](https://img.shields.io/github/stars/jenser1/ha-vorrat-addon?style=social)](https://github.com/jenser1/ha-vorrat-addon)
 
 Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezepten, Einkaufslisten, Web-Import und Dashboard-Sensoren.
 
@@ -52,17 +49,17 @@ Automatisch verfügbare HA-Sensoren:
 
 ## 🔧 Installation
 
-### Über HACS (empfohlen)
-1. HACS → ⋮ → **Custom repositories**
-2. URL: `https://github.com/jenser1/ha-vorrat-addon`
-3. Typ: **Add-on**
-4. **Vorratsverwaltung** installieren & starten
-
-### Manuell
+### Über Add-on Store (empfohlen)
 1. **Einstellungen → Add-ons → Add-on Store → ⋮ → Repositories**
 2. URL hinzufügen: `https://github.com/jenser1/ha-vorrat-addon`
 3. **Vorratsverwaltung** installieren & starten
 4. Über die HA-Sidebar öffnen
+
+### Über HACS
+1. HACS → ⋮ → **Custom repositories**
+2. URL: `https://github.com/jenser1/ha-vorrat-addon`
+3. Typ: **Add-on**
+4. **Vorratsverwaltung** installieren & starten
 
 ---
 
@@ -88,6 +85,12 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 ---
 
 ## 📝 Changelog
+
+### 1.3.0
+- 🛒 Produkte direkt aus der Übersicht zur Einkaufsliste hinzufügen
+- ↓ Nullbestände automatisch ans Ende sortiert
+- ✅ Kompatibilität mit HACS Add-on Store
+- 🌐 Quell-URL wird beim Web-Import gespeichert (Link zum Originalrezept)
 
 ### 1.2.2
 - Quell-URL wird beim Web-Import gespeichert

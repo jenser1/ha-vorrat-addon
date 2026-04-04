@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ t.settings }}{% endblock %}
+{% block page_title %}{{ t.settings }}{% endblock %}
+
+{% block content %}
+<div style="max-width:500px; margin:0 auto;">
+
+  <form method="post">
+    <div class="card">
+      <div class="card-title" style="margin-bottom:16px;">🌍 {{ t.language }} & {{ t.currency }}</div>
+
+      <div class="form-group" style="margin-bottom:16px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          {{ t.language }}
+        </label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          {% for code, label in alle_sprachen.items() %}
+          <label style="display:flex; align-items:center; gap:10px; padding:12px 14px;
+                         border:2px solid {{ 'var(--primary)' if settings.sprache == code else 'var(--border)' }};
+                         border-radius:12px; cursor:pointer; background:{{ '#eff6ff' if settings.sprache == code else 'white' }};
+                         transition: all 0.15s;">
+            <input type="radio" name="sprache" value="{{ code }}"
+                   {{ 'checked' if settings.sprache == code }}
+                   style="width:auto; display:none;"
+                   onchange="this.form.submit()">
+            <span style="font-size:1.3rem;">{{ label[:2] }}</span>
+            <span style="font-size:0.9rem; font-weight:500;">{{ label[3:] }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:20px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          {{ t.currency }}
+        </label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          {% for code, info in alle_waehrungen.items() %}
+          <label style="display:flex; align-items:center; gap:10px; padding:12px 14px;
+                         border:2px solid {{ 'var(--primary)' if settings.waehrung == code else 'var(--border)' }};
+                         border-radius:12px; cursor:pointer; background:{{ '#eff6ff' if settings.waehrung == code else 'white' }};
+                         transition: all 0.15s;">
+            <input type="radio" name="waehrung" value="{{ code }}"
+                   {{ 'checked' if settings.waehrung == code }}
+                   style="width:auto; display:none;"
+                   onchange="this.form.submit()">
+            <span style="font-size:1.4rem; font-weight:700; color:var(--primary); min-width:28px;">{{ info.symbol }}</span>
+            <div>
+              <div style="font-size:0.88rem; font-weight:600;">{{ code }}</div>
+              <div style="font-size:0.75rem; color:var(--muted);">{{ info.name }}</div>
+            </div>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="width:100%;">
+        💾 {{ t.save }}
+      </button>
+    </div>
+  </form>
+
+  <!-- Vorschau -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px;">👁️ Vorschau</div>
+    <div style="display:flex; flex-direction:column; gap:8px; font-size:0.9rem;">
+      <div style="display:flex; justify-content:space-between; padding:10px; background:#f8fafc; border-radius:8px;">
+        <span>{{ t.products }}</span>
+        <span style="color:var(--primary); font-weight:600;">{{ t.save }}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:10px; background:#f8fafc; border-radius:8px;">
+        <span>{{ t.total_price }}</span>
+        <span style="font-weight:600;">
+          {% if settings.waehrung == 'EUR' %}12,99 €
+          {% elif settings.waehrung == 'CHF' %}CHF 13.50
+          {% elif settings.waehrung == 'GBP' %}£ 11.20
+          {% else %}$ 14.99{% endif %}
+        </span>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:10px; background:#f8fafc; border-radius:8px;">
+        <span>{{ t.expiry_short }}</span>
+        <span class="mhd-badge mhd-warnung">{{ t.mhd_warning }}</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

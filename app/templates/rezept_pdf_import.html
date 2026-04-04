@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}PDF importieren{% endblock %}
+{% block page_title %}PDF importieren{% endblock %}
+
+{% block content %}
+<div style="max-width: 1100px; margin: 0 auto;">
+
+  <!-- Upload -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom: 14px;">📄 Rezept-PDF hochladen</div>
+    <form method="post" enctype="multipart/form-data">
+      <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+        <div class="form-group" style="flex: 1; min-width: 200px;">
+          <label>PDF-Datei auswählen</label>
+          <input type="file" name="pdf" accept=".pdf" required>
+        </div>
+        <button type="submit" class="btn btn-primary">📤 Text extrahieren</button>
+      </div>
+    </form>
+  </div>
+
+  {% if extrahierter_text %}
+
+  {% if abschnitte.zutaten or abschnitte.anleitung %}
+  <div class="alert alert-success">
+    ✅ Abschnitte automatisch erkannt – bitte prüfen und ggf. anpassen.
+  </div>
+  {% else %}
+  <div class="alert alert-info">
+    ℹ️ Keine Abschnitte automatisch erkannt. Bitte Text links lesen und Formular rechts manuell ausfüllen.
+  </div>
+  {% endif %}
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start;">
+
+    <!-- Extrahierter Text -->
+    <div class="card" style="position: sticky; top: 80px;">
+      <div class="card-header">
+        <span class="card-title">📋 Extrahierter Text</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="allesKopieren()">📋 Kopieren</button>
+      </div>
+      <div id="rohtext-anzeige"
+           style="height: 520px; overflow-y: auto; background: #f8fafc; border: 1px solid var(--border);
+                  border-radius: 8px; padding: 14px; font-size: 0.82rem; line-height: 1.7;
+                  font-family: monospace; white-space: pre-wrap; word-break: break-word;">{{ extrahierter_text }}</div>
+      <textarea id="rohtext" style="display:none;">{{ extrahierter_text }}</textarea>
+    </div>
+
+    <!-- Rezept Formular -->
+    <div>
+      <form method="post" action="{{ url_for('rezept_neu') }}">
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom: 14px;">✍️ Rezept anlegen</div>
+          <div class="form-grid">
+            <div class="form-group" style="grid-column: 1 / -1;">
+              <label>Rezeptname *</label>
+              <input type="text" name="name" required value="{{ abschnitte.titel }}" placeholder="Name des Rezepts">
+            </div>
+            <div class="form-group" style="grid-column: 1 / -1;">
+              <label>Kurzbeschreibung</label>
+              <input type="text" name="beschreibung" placeholder="Optional">
+            </div>
+            <div class="form-group">
+              <label>Portionen</label>
+              <input type="number" name="portionen" value="4" min="1">
+            </div>
+            <div class="form-group">
+              <label>Kategorie</label>
+              <select name="kategorie">
+                {% for k in ['Frühstück','Hauptgericht','Beilage','Suppe','Salat','Dessert','Snack','Getränk','Backen','Sonstiges'] %}
+                  <option>{{ k }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🧺 Zutaten</span>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="zeileHinzufuegen()">➕ Zeile</button>
+          </div>
+          <div id="zutaten-liste">
+            {% if abschnitte.zutaten %}
+              {% for zeile in abschnitte.zutaten.split('\n') %}{% if zeile.strip() %}
+              <div class="zutat-zeile" style="display:flex; gap:6px; margin-bottom:6px; align-items:center;">
+                <input type="text" name="zutat_name" value="{{ zeile.strip() }}" placeholder="Zutat" style="flex:2;">
+                <input type="number" name="zutat_menge" value="1" step="0.1" min="0" style="flex:1;">
+                <select name="zutat_einheit" style="flex:1;">
+                  {% for e in einheiten %}<option>{{ e }}</option>{% endfor %}
+                </select>
+                <button type="button" onclick="this.parentElement.remove()"
+                        style="background:none;border:none;cursor:pointer;font-size:1rem;color:var(--muted);">✕</button>
+              </div>
+              {% endif %}{% endfor %}
+            {% else %}
+              {% for _ in range(5) %}
+              <div class="zutat-zeile" style="display:flex; gap:6px; margin-bottom:6px; align-items:center;">
+                <input type="text" name="zutat_name" placeholder="Zutat" style="flex:2;">
+                <input type="number" name="zutat_menge" value="1" step="0.1" min="0" style="flex:1;">
+                <select name="zutat_einheit" style="flex:1;">
+                  {% for e in einheiten %}<option>{{ e }}</option>{% endfor %}
+                </select>
+                <button type="button" onclick="this.parentElement.remove()"
+                        style="background:none;border:none;cursor:pointer;font-size:1rem;color:var(--muted);">✕</button>
+              </div>
+              {% endfor %}
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom: 10px;">📝 Zubereitung</div>
+          <textarea name="anleitung" rows="10"
+                    style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px;
+                           font-size:0.88rem; line-height:1.6; resize:vertical;">{{ abschnitte.anleitung }}</textarea>
+        </div>
+
+        <div style="display:flex; gap:12px;">
+          <button type="submit" class="btn btn-primary">💾 Rezept speichern</button>
+          <a href="{{ url_for('rezepte') }}" class="btn btn-ghost">Abbrechen</a>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<template id="einheit-optionen">
+  {% for e in einheiten %}<option>{{ e }}</option>{% endfor %}
+</template>
+
+<script>
+function zeileHinzufuegen() {
+  const liste = document.getElementById('zutaten-liste');
+  const optionen = document.getElementById('einheit-optionen').innerHTML;
+  const div = document.createElement('div');
+  div.style = 'display:flex; gap:6px; margin-bottom:6px; align-items:center;';
+  div.innerHTML = `
+    <input type="text" name="zutat_name" placeholder="Zutat" style="flex:2;">
+    <input type="number" name="zutat_menge" value="1" step="0.1" min="0" style="flex:1;">
+    <select name="zutat_einheit" style="flex:1;">${optionen}</select>
+    <button type="button" onclick="this.parentElement.remove()"
+            style="background:none;border:none;cursor:pointer;font-size:1rem;color:var(--muted);">✕</button>
+  `;
+  liste.appendChild(div);
+  div.querySelector('input[name=zutat_name]').focus();
+}
+
+function allesKopieren() {
+  const ta = document.getElementById('rohtext');
+  ta.style.display = 'block';
+  ta.select();
+  document.execCommand('copy');
+  ta.style.display = 'none';
+  event.target.textContent = '✅ Kopiert!';
+  setTimeout(() => event.target.textContent = '📋 Kopieren', 2000);
+}
+</script>
+{% endblock %}

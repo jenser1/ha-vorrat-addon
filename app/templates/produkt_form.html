@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Produkt bearbeiten' if produkt else 'Neues Produkt' }}{% endblock %}
+{% block page_title %}{{ 'Produkt bearbeiten' if produkt else 'Neues Produkt' }}{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 700px; margin: 0 auto;">
+  <div class="card-header">
+    <span class="card-title">{{ '✏️ Produkt bearbeiten' if produkt else '➕ Neues Produkt hinzufügen' }}</span>
+  </div>
+
+  <form method="post">
+    <div class="form-grid">
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label>Produktname *</label>
+        <input type="text" name="name" value="{{ produkt.name if produkt else '' }}" required placeholder="z. B. Tomaten, Mehl, Milch...">
+      </div>
+
+      <div class="form-group">
+        <label>Menge</label>
+        <input type="number" name="menge" step="0.1" min="0"
+          value="{{ produkt.menge if produkt else 1 }}">
+      </div>
+
+      <div class="form-group">
+        <label>Einheit</label>
+        <select name="einheit">
+          {% set einheiten = ['Stück', 'g', 'kg', 'ml', 'l', 'Packung', 'Dose', 'Flasche', 'Tüte'] %}
+          {% for e in einheiten %}
+            <option value="{{ e }}" {{ 'selected' if produkt and produkt.einheit == e }}>{{ e }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Mindestmenge</label>
+        <input type="number" name="mindestmenge" step="0.1" min="0"
+          value="{{ produkt.mindestmenge if produkt else 1 }}">
+      </div>
+
+      <div class="form-group">
+        <label>Lagerort</label>
+        <input type="text" name="lagerort" value="{{ produkt.lagerort if produkt else '' }}"
+          placeholder="z. B. Kühlschrank, Keller...">
+      </div>
+
+      <div class="form-group">
+        <label>Kategorie</label>
+        <select name="kategorie">
+          {% set kategorien = ['Obst & Gemüse', 'Milchprodukte', 'Fleisch & Fisch', 'Backwaren', 'Tiefkühl', 'Getränke', 'Konserven', 'Gewürze', 'Süßes', 'Haushalt', 'Sonstiges'] %}
+          {% for k in kategorien %}
+            <option value="{{ k }}" {{ 'selected' if produkt and produkt.kategorie == k }}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label>Mindesthaltbarkeitsdatum</label>
+        <input type="date" name="mhd"
+          value="{{ produkt.mhd.strftime('%Y-%m-%d') if produkt and produkt.mhd else '' }}">
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 12px; margin-top: 24px;">
+      <button type="submit" class="btn btn-primary">
+        {{ '💾 Speichern' if produkt else '✅ Hinzufügen' }}
+      </button>
+      <a href="{{ url_for('index') }}" class="btn btn-ghost">Abbrechen</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

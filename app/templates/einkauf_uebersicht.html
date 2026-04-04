@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Einkaufslisten{% endblock %}
+{% block page_title %}Einkaufslisten{% endblock %}
+
+{% block topbar_actions %}
+  <form method="post" action="{{ url_for('einkauf_liste_neu') }}" style="display:flex; gap:8px; align-items:center;">
+    <input type="text" name="name" placeholder="Neue Liste..." required
+           style="padding:7px 12px; border:1px solid var(--border); border-radius:8px; font-size:0.88rem; width:160px;">
+    <button type="submit" class="btn btn-primary">➕ Erstellen</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+
+{% if nicht_zugeordnet %}
+<div class="alert alert-warning">
+  📦 <strong>{{ nicht_zugeordnet|length }} neue Produkte nicht zugeordnet:</strong>
+  {{ nicht_zugeordnet|map(attribute='name')|join(', ') }} –
+  <a href="{{ url_for('index') }}?kategorie=Nicht+zugeordnet" style="color:inherit; font-weight:600;">
+    jetzt zuordnen →
+  </a>
+</div>
+{% endif %}
+
+{% if unter_mindest %}
+<div class="alert alert-info">
+  📉 <strong>{{ unter_mindest|length }} Produkte unter Mindestmenge</strong> – öffne eine Liste und klicke „Auto-befüllen".
+</div>
+{% endif %}
+
+{% if listen %}
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px;">
+  {% for l in listen %}
+  {% set offene = l.items|selectattr("erledigt","equalto",false)|list %}
+  {% set erledigte = l.items|selectattr("erledigt","equalto",true)|list %}
+  {% set preis = l.items|selectattr("preis")|sum(attribute="preis") %}
+  <div class="card" style="margin-bottom:0;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+      <div>
+        <div style="font-weight:700; font-size:1.05rem;">🛒 {{ l.name }}</div>
+        <div style="font-size:0.8rem; color:var(--muted); margin-top:2px;">
+          {{ l.erstellt.strftime('%d.%m.%Y') }}
+        </div>
+      </div>
+      <form method="post" action="{{ url_for('einkauf_liste_loeschen', liste_id=l.id) }}"
+            onsubmit="return confirm('Liste löschen?')">
+        <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>
+      </form>
+    </div>
+
+    <div style="display:flex; gap:16px; font-size:0.85rem; margin-bottom:14px;">
+      <span>📋 {{ offene|length }} offen</span>
+      <span>✅ {{ erledigte|length }} erledigt</span>
+      {% if preis > 0 %}
+      <span>💶 {{ "%.2f"|format(preis) }} €</span>
+      {% endif %}
+    </div>
+
+    {% if offene %}
+    <div style="margin-bottom:12px;">
+      {% for item in offene[:4] %}
+      <div style="font-size:0.82rem; padding:3px 0; color:var(--text);">
+        • {{ item.name }}
+        <span style="color:var(--muted);">{{ item.menge|int if item.menge == item.menge|int else item.menge }} {{ item.einheit }}</span>
+      </div>
+      {% endfor %}
+      {% if offene|length > 4 %}
+      <div style="font-size:0.78rem; color:var(--muted);">... und {{ offene|length - 4 }} weitere</div>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <a href="{{ url_for('einkauf_liste', liste_id=l.id) }}" class="btn btn-primary" style="width:100%; justify-content:center;">
+      Liste öffnen →
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card" style="text-align:center; padding:50px;">
+  <div style="font-size:3rem; margin-bottom:12px;">🛒</div>
+  <p style="color:var(--muted); margin-bottom:16px;">Noch keine Einkaufslisten vorhanden.</p>
+  <form method="post" action="{{ url_for('einkauf_liste_neu') }}" style="display:flex; gap:8px; justify-content:center;">
+    <input type="text" name="name" placeholder="z. B. Edeka, Aldi..." required
+           style="padding:9px 12px; border:1px solid var(--border); border-radius:8px; font-size:0.9rem;">
+    <button type="submit" class="btn btn-primary">➕ Erste Liste erstellen</button>
+  </form>
+</div>
+{% endif %}
+
+{% endblock %}

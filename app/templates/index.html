@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Übersicht<!-- Einkaufsliste Modal -->
+<div id="einkauf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+     z-index:999; align-items:center; justify-content:center;">
+  <div style="background:white; border-radius:16px; padding:24px; width:90%; max-width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <h3 style="margin-bottom:16px; font-size:1rem;">🛒 Zur Einkaufsliste hinzufügen</h3>
+    <form method="post" id="einkauf-form">
+      <input type="hidden" name="name" id="modal-name">
+      <div class="form-group" style="margin-bottom:12px;">
+        <label>Liste auswählen</label>
+        <select name="liste_id" style="width:100%;">
+          {% for l in alle_listen %}
+            <option value="{{ l.id }}">🛒 {{ l.name }}</option>
+          {% endfor %}
+          {% if not alle_listen %}
+            <option value="">– Keine Liste vorhanden –</option>
+          {% endif %}
+        </select>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <div class="form-group" style="flex:1;">
+          <label>Menge</label>
+          <input type="number" name="menge" id="modal-menge" value="1" step="0.1" min="0.1">
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Einheit</label>
+          <input type="text" name="einheit" id="modal-einheit" readonly
+                 style="background:#f8fafc;">
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:16px;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">➕ Hinzufügen</button>
+        <button type="button" class="btn btn-ghost" onclick="schliesseModal()">Abbrechen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function einkaufModal(id, name, einheit) {
+  {% if alle_listen %}
+  document.getElementById('modal-name').value = name;
+  document.getElementById('modal-einheit').value = einheit;
+  const listeId = document.querySelector('#einkauf-form select[name=liste_id]').value;
+  document.getElementById('einkauf-form').action = '/einkauf/liste/' + listeId + '/hinzufuegen';
+  // Formular action dynamisch setzen
+  document.querySelector('#einkauf-form select[name=liste_id]').addEventListener('change', function() {
+    document.getElementById('einkauf-form').action = '/einkauf/liste/' + this.value + '/hinzufuegen';
+  });
+  const modal = document.getElementById('einkauf-modal');
+  modal.style.display = 'flex';
+  {% else %}
+  alert('Bitte zuerst eine Einkaufsliste erstellen!');
+  window.location.href = '{{ url_for("einkauf") }}';
+  {% endif %}
+}
+
+function schliesseModal() {
+  document.getElementById('einkauf-modal').style.display = 'none';
+}
+
+// Außerhalb klicken schließt Modal
+document.getElementById('einkauf-modal').addEventListener('click', function(e) {
+  if (e.target === this) schliesseModal();
+});
+</script>
+
+{% endblock %}
+{% block page_title %}Übersicht{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('produkt_neu') }}" class="btn btn-primary">➕ Produkt hinzufügen</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat primary">
+    <div class="stat-label">Produkte gesamt</div>
+    <div class="stat-value">{{ produkte|length }}</div>
+  </div>
+  <div class="stat danger">
+    <div class="stat-label">Abgelaufen</div>
+    <div class="stat-value">{{ abgelaufen|length }}</div>
+  </div>
+  <div class="stat warning">
+    <div class="stat-label">Bald ablaufend</div>
+    <div class="stat-value">{{ bald_ablaufend|length }}</div>
+  </div>
+  <div class="stat warning">
+    <div class="stat-label">Unter Mindestmenge</div>
+    <div class="stat-value">{{ unter_mindest|length }}</div>
+  </div>
+</div>
+
+<!-- Warnungen -->
+{% if abgelaufen %}
+<div class="alert alert-danger">
+  ⚠️ <strong>{{ abgelaufen|length }} Produkt(e) abgelaufen:</strong>
+  {{ abgelaufen|map(attribute='name')|join(', ') }}
+</div>
+{% endif %}
+
+{% if bald_ablaufend %}
+<div class="alert alert-warning">
+  🕒 <strong>{{ bald_ablaufend|length }} Produkt(e) laufen bald ab:</strong>
+  {{ bald_ablaufend|map(attribute='name')|join(', ') }}
+</div>
+{% endif %}
+
+{% if unter_mindest %}
+<div class="alert alert-info">
+  📉 <strong>{{ unter_mindest|length }} Produkt(e) unter Mindestmenge</strong> –
+  <a href="{{ url_for('einkauf') }}" style="color: inherit; font-weight: 600;">zur Einkaufsliste →</a>
+</div>
+{% endif %}
+
+<!-- Kategorie-Filter -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">
+      {% if kat_filter %}{{ kat_filter }}{% else %}Alle Produkte{% endif %}
+    </span>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <a href="{{ url_for('index') }}" class="btn btn-ghost btn-sm {% if not kat_filter %}btn-primary{% endif %}">Alle</a>
+      {% for kat in kategorien %}
+        <a href="{{ url_for('index', kategorie=kat) }}" class="btn btn-sm {% if kat_filter == kat %}btn-primary{% else %}btn-ghost{% endif %}">
+          {{ kat }}
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if produkte %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Produkt</th>
+          <th>Menge</th>
+          <th>Lagerort</th>
+          <th>MHD</th>
+          <th>Kategorie</th>
+          <th>Aktionen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in produkte %}
+        <tr>
+          <td><strong>{{ p.name }}</strong></td>
+          <td>
+            <div class="stepper">
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                <input type="hidden" name="aktion" value="verringern">
+                <input type="hidden" name="wert" value="1">
+                <button type="submit">−</button>
+              </form>
+              <span class="menge-wert" style="color: {{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
+                {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
+              </span>
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                <input type="hidden" name="aktion" value="erhoehen">
+                <input type="hidden" name="wert" value="1">
+                <button type="submit">+</button>
+              </form>
+            </div>
+          </td>
+          <td>{{ p.lagerort or '–' }}</td>
+          <td>
+            {% if p.mhd %}
+              <span class="mhd-badge mhd-{{ p.mhd_status }}">
+                {{ p.mhd.strftime('%d.%m.%Y') }}
+              </span>
+            {% else %}–{% endif %}
+          </td>
+          <td><span class="kat-tag">{{ p.kategorie }}</span></td>
+          <td style="white-space:nowrap;">
+            <!-- Zur Einkaufsliste hinzufügen -->
+            <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
+                    onclick="einkaufModal('{{ p.id }}', '{{ p.name }}', '{{ p.einheit }}')">🛒</button>
+            <a href="{{ url_for('produkt_bearbeiten', id=p.id) }}" class="btn btn-ghost btn-sm">✏️</a>
+            <form method="post" action="{{ url_for('produkt_loeschen', id=p.id) }}" style="display:inline"
+              onsubmit="return confirm('{{ p.name }} wirklich löschen?')">
+              <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div style="text-align: center; padding: 40px; color: var(--muted);">
+      <div style="font-size: 3rem; margin-bottom: 12px;">📦</div>
+      <p>Noch keine Produkte vorhanden.</p>
+      <a href="{{ url_for('produkt_neu') }}" class="btn btn-primary" style="margin-top: 12px;">Erstes Produkt hinzufügen</a>
+    </div>
+  {% endif %}
+</div>
+
+{% endblock %}

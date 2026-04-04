@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Rezept bearbeiten' if rezept else 'Neues Rezept' }}{% endblock %}
+{% block page_title %}{{ 'Rezept bearbeiten' if rezept else 'Neues Rezept' }}{% endblock %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 0 auto;">
+<form method="post" id="rezept-form">
+
+  <!-- Grunddaten -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom: 16px;">
+      {{ '✏️ Rezept bearbeiten' if rezept else '✍️ Neues Rezept' }}
+    </div>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label>Rezeptname *</label>
+        <input type="text" name="name" value="{{ rezept.name if rezept else '' }}" required
+               placeholder="z. B. Spaghetti Bolognese">
+      </div>
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label>Kurzbeschreibung</label>
+        <input type="text" name="beschreibung" value="{{ rezept.beschreibung if rezept else '' }}"
+               placeholder="z. B. Klassisches italienisches Nudelgericht">
+      </div>
+      <div class="form-group">
+        <label>Portionen</label>
+        <input type="number" name="portionen" min="1" value="{{ rezept.portionen if rezept else 4 }}">
+      </div>
+      <div class="form-group">
+        <label>Kategorie</label>
+        <select name="kategorie">
+          {% for k in ['Frühstück', 'Hauptgericht', 'Beilage', 'Suppe', 'Salat', 'Dessert', 'Snack', 'Getränk', 'Backen', 'Sonstiges'] %}
+            <option {{ 'selected' if rezept and rezept.kategorie == k }}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Zutaten -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🧺 Zutaten</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="zeileHinzufuegen()">➕ Zeile hinzufügen</button>
+    </div>
+
+    <div id="zutaten-liste">
+      {% if rezept and rezept.zutaten %}
+        {% for z in rezept.zutaten %}
+        <div class="zutat-zeile" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+          <input type="text" name="zutat_name" placeholder="Zutat" value="{{ z.name }}"
+                 style="flex: 2;" required>
+          <input type="number" name="zutat_menge" placeholder="Menge" value="{{ z.menge|int if z.menge == z.menge|int else z.menge }}"
+                 step="0.1" min="0" style="flex: 1;">
+          <select name="zutat_einheit" style="flex: 1;">
+            {% for e in einheiten %}
+              <option {{ 'selected' if z.einheit == e }}>{{ e }}</option>
+            {% endfor %}
+          </select>
+          <button type="button" onclick="this.parentElement.remove()"
+                  style="background:none; border:none; cursor:pointer; font-size:1.1rem; color:var(--muted);">✕</button>
+        </div>
+        {% endfor %}
+      {% else %}
+        <!-- 3 leere Zeilen als Start -->
+        {% for _ in range(3) %}
+        <div class="zutat-zeile" style="display:flex; gap:8px; margin-bottom:8px; align-items:center;">
+          <input type="text" name="zutat_name" placeholder="Zutat" style="flex: 2;">
+          <input type="number" name="zutat_menge" placeholder="Menge" value="1" step="0.1" min="0" style="flex: 1;">
+          <select name="zutat_einheit" style="flex: 1;">
+            {% for e in einheiten %}<option>{{ e }}</option>{% endfor %}
+          </select>
+          <button type="button" onclick="this.parentElement.remove()"
+                  style="background:none; border:none; cursor:pointer; font-size:1.1rem; color:var(--muted);">✕</button>
+        </div>
+        {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Anleitung -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom: 12px;">📝 Zubereitung</div>
+    <textarea name="anleitung" rows="10" placeholder="Zubereitungsschritte hier eingeben..."
+              style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px;
+                     font-size:0.9rem; line-height:1.6; resize:vertical;">{{ rezept.anleitung if rezept else '' }}</textarea>
+  </div>
+
+  <div style="display: flex; gap: 12px;">
+    <button type="submit" class="btn btn-primary">💾 Speichern</button>
+    <a href="{{ url_for('rezepte') }}" class="btn btn-ghost">Abbrechen</a>
+  </div>
+
+</form>
+</div>
+
+<!-- Einheit-Template für JS -->
+<template id="einheit-optionen">
+  {% for e in einheiten %}<option>{{ e }}</option>{% endfor %}
+</template>
+
+<script>
+function zeileHinzufuegen() {
+  const liste = document.getElementById('zutaten-liste');
+  const optionen = document.getElementById('einheit-optionen').innerHTML;
+  const div = document.createElement('div');
+  div.className = 'zutat-zeile';
+  div.style = 'display:flex; gap:8px; margin-bottom:8px; align-items:center;';
+  div.innerHTML = `
+    <input type="text" name="zutat_name" placeholder="Zutat" style="flex:2;">
+    <input type="number" name="zutat_menge" placeholder="Menge" value="1" step="0.1" min="0" style="flex:1;">
+    <select name="zutat_einheit" style="flex:1;">${optionen}</select>
+    <button type="button" onclick="this.parentElement.remove()"
+            style="background:none;border:none;cursor:pointer;font-size:1.1rem;color:var(--muted);">✕</button>
+  `;
+  liste.appendChild(div);
+  div.querySelector('input[name=zutat_name]').focus();
+}
+</script>
+
+{% endblock %}

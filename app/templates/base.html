@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1e293b">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <title>{% block title %}Vorrat{% endblock %}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+    :root {
+      --bg: #f0f2f5;
+      --card: #ffffff;
+      --primary: #3b82f6;
+      --primary-dark: #2563eb;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --success: #10b981;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --sidebar-bg: #1e293b;
+      --sidebar-text: #cbd5e1;
+      --nav-h: 64px;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding-bottom: calc(var(--nav-h) + var(--safe-bottom));
+    }
+
+    /* ══ TOPBAR ══ */
+    .topbar {
+      background: var(--sidebar-bg);
+      color: white;
+      padding: 0 16px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+
+    .topbar-left { display: flex; align-items: center; gap: 10px; }
+    .topbar-logo { font-size: 1.4rem; }
+    .topbar h1 { font-size: 1rem; font-weight: 600; color: white; }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ══ CONTENT ══ */
+    .content {
+      padding: 16px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    /* ══ BOTTOM NAV ══ */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: calc(var(--nav-h) + var(--safe-bottom));
+      padding-bottom: var(--safe-bottom);
+      background: var(--sidebar-bg);
+      display: flex;
+      align-items: stretch;
+      z-index: 100;
+      box-shadow: 0 -2px 12px rgba(0,0,0,0.2);
+    }
+
+    .nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      text-decoration: none;
+      color: #64748b;
+      font-size: 0.65rem;
+      font-weight: 500;
+      padding: 8px 4px;
+      transition: color 0.15s;
+      position: relative;
+      border: none;
+      background: none;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .nav-item .nav-icon { font-size: 1.4rem; line-height: 1; }
+    .nav-item span { line-height: 1; }
+
+    .nav-item.active {
+      color: var(--primary);
+    }
+
+    .nav-item.active::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 20%;
+      right: 20%;
+      height: 2px;
+      background: var(--primary);
+      border-radius: 0 0 4px 4px;
+    }
+
+    .nav-badge {
+      position: absolute;
+      top: 6px;
+      right: calc(50% - 18px);
+      background: var(--danger);
+      color: white;
+      font-size: 0.6rem;
+      font-weight: 700;
+      min-width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+    }
+
+    /* ══ CARDS ══ */
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+
+    /* ══ STATS ══ */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat {
+      background: white;
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
+    .stat-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 4px; }
+    .stat-value { font-size: 1.7rem; font-weight: 700; }
+    .stat.danger .stat-value { color: var(--danger); }
+    .stat.warning .stat-value { color: var(--warning); }
+    .stat.success .stat-value { color: var(--success); }
+    .stat.primary .stat-value { color: var(--primary); }
+
+    /* ══ ALERTS ══ */
+    .alert {
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+
+    .alert-danger  { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+    .alert-warning { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+    .alert-success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+    .alert-info    { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+
+    /* ══ TABELLE ══ */
+    .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 8px 10px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 2px solid var(--border); white-space: nowrap; }
+    td { padding: 11px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+
+    /* ══ BUTTONS ══ */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      text-decoration: none;
+      transition: opacity 0.15s, transform 0.1s;
+      min-height: 44px; /* iOS touch target */
+      touch-action: manipulation;
+    }
+
+    .btn:active { opacity: 0.75; transform: scale(0.97); }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-danger  { background: var(--danger); color: white; }
+    .btn-success { background: var(--success); color: white; }
+    .btn-ghost   { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-sm      { padding: 7px 12px; font-size: 0.8rem; min-height: 36px; }
+
+    /* ══ FORMULARE ══ */
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group label { font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+
+    input, select, textarea {
+      padding: 11px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      font-size: 1rem; /* Verhindert iOS Zoom */
+      color: var(--text);
+      background: white;
+      width: 100%;
+      transition: border-color 0.15s;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(59,130,246,0.15);
+    }
+
+    /* ══ MHD BADGES ══ */
+    .mhd-badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; }
+    .mhd-ok        { background: #d1fae5; color: #065f46; }
+    .mhd-warnung   { background: #fef3c7; color: #92400e; }
+    .mhd-kritisch  { background: #fee2e2; color: #991b1b; }
+    .mhd-abgelaufen{ background: #f3f4f6; color: #6b7280; text-decoration: line-through; }
+
+    /* ══ STEPPER ══ */
+    .stepper { display: flex; align-items: center; gap: 6px; }
+    .stepper button {
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      border: 1.5px solid var(--border);
+      background: white;
+      cursor: pointer;
+      font-size: 1.1rem;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation;
+    }
+    .stepper .menge-wert { font-weight: 600; min-width: 40px; text-align: center; font-size: 0.95rem; }
+
+    /* ══ KAT TAG ══ */
+    .kat-tag { display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 0.72rem; background: #eff6ff; color: var(--primary); font-weight: 500; }
+
+    /* ══ FLASHES ══ */
+    .flashes { margin-bottom: 14px; }
+
+    /* ══ DESKTOP: Sidebar wieder einblenden ══ */
+    @media (min-width: 768px) {
+      body {
+        padding-bottom: 0;
+        display: flex;
+      }
+
+      .bottom-nav { display: none; }
+
+      .sidebar {
+        display: flex !important;
+        width: 220px;
+        background: var(--sidebar-bg);
+        color: var(--sidebar-text);
+        flex-direction: column;
+        flex-shrink: 0;
+        position: fixed;
+        top: 0; left: 0;
+        height: 100vh;
+        overflow-y: auto;
+        z-index: 100;
+      }
+
+      .sidebar-logo {
+        padding: 20px 16px;
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: white;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .sidebar-section {
+        padding: 12px 16px 4px;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #64748b;
+      }
+
+      .sidebar a {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        color: var(--sidebar-text);
+        text-decoration: none;
+        font-size: 0.9rem;
+        border-radius: 6px;
+        margin: 2px 8px;
+        transition: background 0.15s;
+      }
+
+      .sidebar a:hover, .sidebar a.active {
+        background: rgba(59,130,246,0.2);
+        color: white;
+      }
+
+      .sidebar a.active { color: var(--primary); font-weight: 600; }
+      .sidebar a .icon { font-size: 1rem; width: 20px; text-align: center; }
+
+      .badge-sidebar {
+        margin-left: auto;
+        background: var(--primary);
+        color: white;
+        border-radius: 999px;
+        padding: 1px 7px;
+        font-size: 0.7rem;
+      }
+
+      .main-wrap {
+        margin-left: 220px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+      }
+
+      .topbar {
+        background: white;
+        color: var(--text);
+        border-bottom: 1px solid var(--border);
+        box-shadow: none;
+        height: auto;
+        padding: 14px 24px;
+      }
+
+      .topbar h1 { color: var(--text); font-size: 1.1rem; }
+      .topbar-logo { display: none; }
+
+      .content {
+        padding: 24px;
+        max-width: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Desktop Sidebar (nur ab 768px sichtbar) -->
+<nav class="sidebar" style="display:none">
+  <div class="sidebar-logo">
+    <span>🥫</span>
+    <span>Vorratsverwaltung</span>
+  </div>
+
+  <div class="sidebar-section">Haushalt</div>
+  <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}">
+    <span class="icon">🏠</span><span>Übersicht</span>
+  </a>
+  <a href="{{ url_for('einkauf') }}" class="{{ 'active' if request.endpoint in ['einkauf','einkauf_liste'] }}">
+    <span class="icon">🛒</span><span>Einkaufslisten</span>
+    {% if einkauf_count is defined and einkauf_count > 0 %}
+      <span class="badge-sidebar">{{ einkauf_count }}</span>
+    {% endif %}
+  </a>
+  <a href="{{ url_for('produkt_neu') }}" class="{{ 'active' if request.endpoint == 'produkt_neu' }}">
+    <span class="icon">➕</span><span>Produkt hinzufügen</span>
+  </a>
+
+  <a href="{{ url_for('einstellungen') }}" class="{{ 'active' if request.endpoint == 'einstellungen' }}">
+    <span class="icon">⚙️</span><span>{{ t.settings if t is defined else 'Einstellungen' }}</span>
+  </a>
+
+  <div class="sidebar-section">Rezepte</div>
+  <a href="{{ url_for('rezepte') }}" class="{{ 'active' if request.endpoint in ['rezepte','rezept_detail'] }}">
+    <span class="icon">📖</span><span>Alle Rezepte</span>
+  </a>
+  <a href="{{ url_for('rezept_neu') }}" class="{{ 'active' if request.endpoint == 'rezept_neu' }}">
+    <span class="icon">✍️</span><span>Neues Rezept</span>
+  </a>
+  <a href="{{ url_for('rezept_pdf_import') }}" class="{{ 'active' if request.endpoint == 'rezept_pdf_import' }}">
+    <span class="icon">📄</span><span>PDF importieren</span>
+  </a>
+  <a href="{{ url_for('rezept_web_import') }}" class="{{ 'active' if request.endpoint == 'rezept_web_import' }}">
+    <span class="icon">🌐</span><span>Web importieren</span>
+  </a>
+</nav>
+
+<div class="main-wrap">
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-logo">🥫</span>
+      <h1>{% block page_title %}Vorrat{% endblock %}</h1>
+    </div>
+    <div class="topbar-actions">{% block topbar_actions %}{% endblock %}</div>
+  </div>
+
+  <!-- Content -->
+  <div class="content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flashes">
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">
+              {% if category == 'success' %}✅{% elif category == 'danger' %}❌{% else %}ℹ️{% endif %}
+              {{ message }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+<!-- Mobile Bottom Navigation -->
+<nav class="bottom-nav">
+  <a href="{{ url_for('index') }}" class="nav-item {{ 'active' if request.endpoint == 'index' }}">
+    <span class="nav-icon">🏠</span>
+    <span>Vorrat</span>
+  </a>
+  <a href="{{ url_for('einkauf') }}" class="nav-item {{ 'active' if request.endpoint in ['einkauf','einkauf_liste'] }}">
+    <span class="nav-icon">🛒</span>
+    <span>Einkauf</span>
+    {% if einkauf_count is defined and einkauf_count > 0 %}
+      <span class="nav-badge">{{ einkauf_count }}</span>
+    {% endif %}
+  </a>
+  <a href="{{ url_for('rezepte') }}" class="nav-item {{ 'active' if request.endpoint in ['rezepte','rezept_detail'] }}">
+    <span class="nav-icon">📖</span>
+    <span>Rezepte</span>
+  </a>
+  <a href="{{ url_for('produkt_neu') }}" class="nav-item {{ 'active' if request.endpoint == 'produkt_neu' }}">
+    <span class="nav-icon">➕</span>
+    <span>Hinzufügen</span>
+  </a>
+  <a href="{{ url_for('rezept_web_import') }}" class="nav-item {{ 'active' if request.endpoint == 'rezept_web_import' }}">
+    <span class="nav-icon">🌐</span>
+    <span>{{ t.nav_import if t is defined else 'Import' }}</span>
+  </a>
+  <a href="{{ url_for('einstellungen') }}" class="nav-item {{ 'active' if request.endpoint == 'einstellungen' }}">
+    <span class="nav-icon">⚙️</span>
+    <span>{{ t.nav_settings if t is defined else 'Einstellungen' }}</span>
+  </a>
+</nav>
+
+</body>
+</html>

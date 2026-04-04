@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Rezepte{% endblock %}
+{% block page_title %}Rezepte{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('rezept_pdf_import') }}" class="btn btn-ghost">📄 PDF</a>
+  <a href="{{ url_for('rezept_web_import') }}" class="btn btn-ghost" style="margin-left:6px;">🌐 Web</a>
+  <a href="{{ url_for('rezept_neu') }}" class="btn btn-primary" style="margin-left:6px;">✍️ Neues Rezept</a>
+{% endblock %}
+
+{% block content %}
+
+{% if rezepte %}
+
+<!-- Filter & Sortierung -->
+{% set kategorien = rezepte|map(attribute='kategorie')|list|unique|sort|list %}
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; align-items:center;">
+  <span style="font-size:0.82rem; color:var(--muted);">Kategorie:</span>
+  <a href="{{ url_for('rezepte') }}" class="btn btn-sm {% if not kat_filter %}btn-primary{% else %}btn-ghost{% endif %}">Alle</a>
+  {% for k in kategorien %}
+    <a href="{{ url_for('rezepte', kategorie=k) }}"
+       class="btn btn-sm {% if kat_filter == k %}btn-primary{% else %}btn-ghost{% endif %}">
+      {{ k }}
+    </a>
+  {% endfor %}
+
+  <span style="margin-left:auto; font-size:0.82rem; color:var(--muted);">Sortieren:</span>
+  <a href="{{ url_for('rezepte', kategorie=kat_filter, sort='name') }}"
+     class="btn btn-sm {% if sort == 'name' %}btn-primary{% else %}btn-ghost{% endif %}">🔤 Name</a>
+  <a href="{{ url_for('rezepte', kategorie=kat_filter, sort='kategorie') }}"
+     class="btn btn-sm {% if sort == 'kategorie' %}btn-primary{% else %}btn-ghost{% endif %}">📂 Kategorie</a>
+  <a href="{{ url_for('rezepte', kategorie=kat_filter, sort='neu') }}"
+     class="btn btn-sm {% if sort == 'neu' or not sort %}btn-primary{% else %}btn-ghost{% endif %}">🕒 Neueste</a>
+</div>
+
+<!-- Gruppenansicht nach Kategorie -->
+{% if sort == 'kategorie' %}
+  {% for kat in kategorien %}
+    {% set kat_rezepte = gefiltert|selectattr('kategorie','equalto',kat)|list %}
+    {% if kat_rezepte %}
+    <div style="margin-bottom:8px; font-size:0.78rem; font-weight:700; text-transform:uppercase;
+                letter-spacing:0.08em; color:var(--muted); padding:0 4px;">{{ kat }}</div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; margin-bottom:24px;">
+      {% for r in kat_rezepte %}
+      <a href="{{ url_for('rezept_detail', id=r.id) }}" style="text-decoration:none; color:inherit;">
+        <div class="card" style="margin-bottom:0; cursor:pointer; transition:box-shadow 0.15s;"
+             onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,0.12)'"
+             onmouseout="this.style.boxShadow=''">
+          <div style="font-weight:700; font-size:0.95rem; margin-bottom:4px;">{{ r.name }}</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <span class="kat-tag">{{ r.kategorie }}</span>
+            <span style="color:var(--muted); font-size:0.75rem;">{{ r.portionen }} Port.</span>
+          </div>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  {% endfor %}
+{% else %}
+  <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px;">
+    {% for r in gefiltert %}
+    <a href="{{ url_for('rezept_detail', id=r.id) }}" style="text-decoration:none; color:inherit;">
+      <div class="card" style="margin-bottom:0; cursor:pointer; transition:box-shadow 0.15s; height:100%;"
+           onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,0.12)'"
+           onmouseout="this.style.boxShadow=''">
+        <div style="font-size:1.8rem; margin-bottom:8px;">
+          {% set icons = {'Frühstück':'🍳','Hauptgericht':'🍽️','Suppe':'🍲','Salat':'🥗','Dessert':'🍰','Backen':'🥐','Snack':'🥪','Getränk':'🥤','Beilage':'🥘'} %}
+          {{ icons.get(r.kategorie, '🍽️') }}
+        </div>
+        <div style="font-weight:700; font-size:0.95rem; margin-bottom:4px;">{{ r.name }}</div>
+        {% if r.beschreibung %}
+          <div style="font-size:0.8rem; color:var(--muted); margin-bottom:8px; line-height:1.4;">
+            {{ r.beschreibung[:70] }}{% if r.beschreibung|length > 70 %}…{% endif %}
+          </div>
+        {% endif %}
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:auto; padding-top:8px;">
+          <span class="kat-tag">{{ r.kategorie }}</span>
+          <span style="color:var(--muted); font-size:0.75rem;">{{ r.portionen }} Port.</span>
+          <span style="color:var(--muted); font-size:0.75rem;">{{ r.zutaten|length }} Zutaten</span>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if not gefiltert %}
+<div class="card" style="text-align:center; padding:40px; color:var(--muted);">
+  Keine Rezepte in dieser Kategorie.
+</div>
+{% endif %}
+
+{% else %}
+<div class="card" style="text-align:center; padding:50px;">
+  <div style="font-size:3rem; margin-bottom:12px;">📖</div>
+  <p style="color:var(--muted); margin-bottom:16px;">Noch keine Rezepte vorhanden.</p>
+  <div style="display:flex; gap:12px; justify-content:center;">
+    <a href="{{ url_for('rezept_pdf_import') }}" class="btn btn-ghost">📄 PDF importieren</a>
+    <a href="{{ url_for('rezept_web_import') }}" class="btn btn-ghost">🌐 Web importieren</a>
+    <a href="{{ url_for('rezept_neu') }}" class="btn btn-primary">✍️ Erstes Rezept anlegen</a>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

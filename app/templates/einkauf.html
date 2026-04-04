@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}{{ liste.name }}{% endblock %}
+{% block page_title %}{{ liste.name }}{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('einkauf') }}" class="btn btn-ghost">← Alle Listen</a>
+  {% if unter_mindest %}
+  <form method="post" action="{{ url_for('einkauf_auto', liste_id=liste.id) }}" style="display:inline; margin-left:8px;">
+    <button type="submit" class="btn btn-success">⚡ Auto ({{ unter_mindest|length }})</button>
+  </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+
+<!-- Listen-Tabs -->
+{% if alle_listen|length > 1 %}
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
+  {% for l in alle_listen %}
+  <a href="{{ url_for('einkauf_liste', liste_id=l.id) }}"
+     class="btn btn-sm {% if l.id == liste.id %}btn-primary{% else %}btn-ghost{% endif %}">
+    🛒 {{ l.name }}
+    {% set n = l.items|selectattr("erledigt","equalto",false)|list|length %}
+    {% if n %}<span style="margin-left:4px; opacity:0.8;">({{ n }})</span>{% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Stats -->
+<div class="stats" style="margin-bottom:16px;">
+  <div class="stat primary">
+    <div class="stat-label">{{ t.open_items if t is defined else 'Offen' }}</div>
+    <div class="stat-value">{{ offene|length }}</div>
+  </div>
+  <div class="stat success">
+    <div class="stat-label">{{ t.done_items if t is defined else 'Erledigt' }}</div>
+    <div class="stat-value">{{ erledigte|length }}</div>
+  </div>
+  <div class="stat primary">
+    <div class="stat-label">{{ t.total_price if t is defined else 'Gesamtpreis' }}</div>
+    <div class="stat-value" style="font-size:1.3rem;" id="stat-gesamt">
+      {{ "%.2f"|format(gesamtpreis) }} {{ waehrung_symbol if waehrung_symbol is defined else '€' }}
+    </div>
+  </div>
+</div>
+
+<!-- Artikel hinzufügen -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">➕ {{ t.add_item if t is defined else 'Artikel hinzufügen' }}</span>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="sortieren('name')">🔤</button>
+      <button class="btn btn-ghost btn-sm" onclick="sortieren('orig')">↺</button>
+    </div>
+  </div>
+  <form method="post" action="{{ url_for('einkauf_hinzufuegen', liste_id=liste.id) }}">
+    <div class="form-grid">
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label>{{ t.name if t is defined else 'Artikel' }}</label>
+        <input type="text" name="name" required placeholder="{{ t.item_placeholder if t is defined else 'z. B. Milch...' }}">
+      </div>
+      <div class="form-group">
+        <label>{{ t.amount if t is defined else 'Menge' }}</label>
+        <input type="number" name="menge" value="1" step="0.1" min="0.1" id="neu-menge" oninput="updateNeuGesamt()">
+      </div>
+      <div class="form-group">
+        <label>{{ t.unit if t is defined else 'Einheit' }}</label>
+        <select name="einheit">
+          {% for e in ['Stück','g','kg','ml','l','Packung','Dose','Flasche'] %}
+            <option>{{ e }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Einzelpreis ({{ waehrung_symbol if waehrung_symbol is defined else '€' }})</label>
+        <input type="text" name="einzelpreis" placeholder="0,00" id="neu-einzelpreis" oninput="updateNeuGesamt()">
+      </div>
+      <div class="form-group">
+        <label>Gesamtpreis</label>
+        <div style="padding:11px 12px; background:#f8fafc; border:1.5px solid var(--border);
+                    border-radius:10px; font-weight:600; color:var(--primary);" id="neu-gesamt">–</div>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:12px; width:100%;">
+      ➕ {{ t.add if t is defined else 'Hinzufügen' }}
+    </button>
+  </form>
+</div>
+
+<!-- Offene Artikel -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">🛒 {{ t.open_items if t is defined else 'Zu kaufen' }} ({{ offene|length }})</span>
+    <span style="font-size:0.75rem; color:var(--muted);">↕ ziehen</span>
+  </div>
+
+  {% if offene %}
+  <div id="sortable-liste">
+    {% for e in offene %}
+    <div class="einkauf-item" data-id="{{ e.id }}"
+         style="padding:10px 6px; border-bottom:1px solid var(--border);">
+
+      <!-- Zeile 1: Handle + Name + Aktionen -->
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+        <span class="drag-handle">⠿</span>
+        <div style="flex:1; font-weight:600; font-size:0.92rem;">{{ e.name }}</div>
+        <form method="post" action="{{ url_for('einkauf_erledigt', id=e.id) }}" style="display:inline;">
+          <input type="hidden" name="einzelpreis" value="{{ e.einzelpreis or '' }}">
+          <button type="submit" class="btn btn-success btn-sm" title="Erledigt">✅</button>
+        </form>
+        <form method="post" action="{{ url_for('einkauf_erledigt', id=e.id) }}" style="display:inline;">
+          <input type="hidden" name="einzelpreis" value="{{ e.einzelpreis or '' }}">
+          <input type="hidden" name="in_bestand" value="1">
+          <button type="submit" class="btn btn-primary btn-sm" title="Erledigt & Vorrat">✅📦</button>
+        </form>
+        <form method="post" action="{{ url_for('einkauf_loeschen', id=e.id) }}" style="display:inline;">
+          <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>
+        </form>
+      </div>
+
+      <!-- Zeile 2: Menge + Einzelpreis + = Gesamtpreis -->
+      <form method="post" action="{{ url_for('einkauf_preis', id=e.id) }}"
+            style="display:flex; gap:6px; align-items:center; padding-left:28px;">
+        <div style="font-size:0.8rem; color:var(--muted); white-space:nowrap;">
+          {{ e.menge|int if e.menge == e.menge|int else e.menge }} {{ e.einheit }}
+        </div>
+        <div style="color:var(--muted); font-size:0.8rem;">×</div>
+        <input type="text" name="einzelpreis"
+               value="{{ '%.2f'|format(e.einzelpreis)|replace('.', ',') if e.einzelpreis else '' }}"
+               placeholder="0,00"
+               style="width:70px; padding:5px 8px; font-size:0.85rem; text-align:right;"
+               oninput="berechneGesamt(this, {{ e.menge }})">
+        <div style="color:var(--muted); font-size:0.8rem;">=</div>
+        <div class="gesamt-anzeige" style="font-weight:700; color:var(--primary); font-size:0.9rem; min-width:60px;">
+          {% if e.gesamtpreis %}{{ '%.2f'|format(e.gesamtpreis)|replace('.', ',') }} {{ waehrung_symbol if waehrung_symbol is defined else '€' }}{% else %}–{% endif %}
+        </div>
+        <button type="submit" class="btn btn-ghost btn-sm" style="padding:5px 8px;">💾</button>
+      </form>
+
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Summe offen -->
+  {% set preis_offen = namespace(total=0) %}
+  {% for e in offene %}{% if e.gesamtpreis %}{% set preis_offen.total = preis_offen.total + e.gesamtpreis %}{% endif %}{% endfor %}
+  {% if preis_offen.total > 0 %}
+  <div style="text-align:right; padding:10px 8px; font-weight:700; border-top:2px solid var(--border); color:var(--primary);">
+    Summe offen: {{ "%.2f"|format(preis_offen.total)|replace('.', ',') }} {{ waehrung_symbol if waehrung_symbol is defined else '€' }}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div style="text-align:center; padding:30px; color:var(--muted);">
+    <div style="font-size:2.5rem;">✅</div>
+    <p>{{ t.all_done if t is defined else 'Alle Artikel erledigt!' }}</p>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Erledigte Artikel -->
+{% if erledigte %}
+<div class="card">
+  <div class="card-header">
+    <span class="card-title" style="color:var(--muted);">✔ {{ t.done_items if t is defined else 'Erledigt' }} ({{ erledigte|length }})</span>
+    <div style="display:flex; gap:8px;">
+      {% set nicht_gebucht = erledigte|selectattr("in_bestand","equalto",false)|list %}
+      {% if nicht_gebucht %}
+      <form method="post" action="{{ url_for('einkauf_alle_buchen', liste_id=liste.id) }}">
+        <button type="submit" class="btn btn-primary btn-sm">📦 Alle buchen ({{ nicht_gebucht|length }})</button>
+      </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('einkauf_leeren', liste_id=liste.id) }}">
+        <button type="submit" class="btn btn-ghost btn-sm">🗑️ Leeren</button>
+      </form>
+    </div>
+  </div>
+
+  {% for e in erledigte %}
+  <div style="display:flex; align-items:center; gap:8px; padding:9px 6px;
+              border-bottom:1px solid var(--border); opacity:0.65;">
+    <div style="flex:1;">
+      <s style="font-size:0.88rem;">{{ e.name }}</s>
+      <span style="color:var(--muted); font-size:0.78rem; margin-left:6px;">
+        {{ e.menge|int if e.menge == e.menge|int else e.menge }} {{ e.einheit }}
+        {% if e.einzelpreis %}
+          × {{ '%.2f'|format(e.einzelpreis)|replace('.', ',') }} =
+          <strong>{{ '%.2f'|format(e.gesamtpreis)|replace('.', ',') }} {{ waehrung_symbol if waehrung_symbol is defined else '€' }}</strong>
+        {% endif %}
+      </span>
+      {% if e.in_bestand %}
+        <span style="font-size:0.72rem; background:#d1fae5; color:#065f46; padding:1px 6px; border-radius:99px; margin-left:4px;">📦</span>
+      {% endif %}
+    </div>
+    {% if not e.in_bestand %}
+    <form method="post" action="{{ url_for('einkauf_bestand_nachbuchen', id=e.id) }}" style="display:inline;">
+      <button type="submit" class="btn btn-ghost btn-sm">📦</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('einkauf_rueckgaengig', id=e.id) }}" style="display:inline;">
+      <button type="submit" class="btn btn-ghost btn-sm">↩️</button>
+    </form>
+    <form method="post" action="{{ url_for('einkauf_loeschen', id=e.id) }}" style="display:inline;">
+      <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>
+    </form>
+  </div>
+  {% endfor %}
+
+  <!-- Gesamtsumme -->
+  <div style="text-align:right; padding:12px 8px; font-weight:700; border-top:2px solid var(--border);">
+    {{ t.total_expense if t is defined else 'Gesamtausgabe' }}:
+    {{ "%.2f"|format(gesamtpreis)|replace('.', ',') }} {{ waehrung_symbol if waehrung_symbol is defined else '€' }}
+  </div>
+</div>
+{% endif %}
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+<script>
+const SORT_URL = "{{ url_for('einkauf_sortieren', liste_id=liste.id) }}";
+const SYMBOL = "{{ waehrung_symbol if waehrung_symbol is defined else '€' }}";
+
+document.addEventListener("DOMContentLoaded", function() {
+  const container = document.getElementById('sortable-liste');
+  if (!container) return;
+  Sortable.create(container, {
+    handle: '.drag-handle',
+    animation: 150,
+    ghostClass: 'sortable-ghost',
+    onEnd: function() {
+      const ids = [...container.querySelectorAll('.einkauf-item')].map(el => parseInt(el.dataset.id));
+      fetch(SORT_URL, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(ids) });
+    }
+  });
+});
+
+// Einzelpreis × Menge live berechnen
+function berechneGesamt(input, menge) {
+  const row = input.closest('form');
+  const anzeige = row.querySelector('.gesamt-anzeige');
+  const val = parseFloat(input.value.replace(',', '.'));
+  if (!isNaN(val) && val > 0) {
+    const gesamt = (val * menge).toFixed(2).replace('.', ',');
+    anzeige.textContent = gesamt + ' ' + SYMBOL;
+    anzeige.style.color = 'var(--primary)';
+  } else {
+    anzeige.textContent = '–';
+  }
+}
+
+// Neu-Hinzufügen: Einzelpreis × Menge live
+function updateNeuGesamt() {
+  const menge = parseFloat(document.getElementById('neu-menge').value) || 0;
+  const ep = parseFloat(document.getElementById('neu-einzelpreis').value.replace(',', '.')) || 0;
+  const el = document.getElementById('neu-gesamt');
+  if (menge > 0 && ep > 0) {
+    el.textContent = (menge * ep).toFixed(2).replace('.', ',') + ' ' + SYMBOL;
+  } else {
+    el.textContent = '–';
+  }
+}
+
+// Sortierung
+let origReihenfolge = null;
+function sortieren(art) {
+  const container = document.getElementById('sortable-liste');
+  if (!container) return;
+  const items = [...container.querySelectorAll('.einkauf-item')];
+  if (art === 'name') {
+    if (!origReihenfolge) origReihenfolge = items.map(el => el.outerHTML);
+    items.sort((a, b) => a.querySelector('strong, [style*="font-weight"]').textContent.trim()
+      .localeCompare(b.querySelector('strong, [style*="font-weight"]').textContent.trim(), 'de'));
+    items.forEach(el => container.appendChild(el));
+  } else if (origReihenfolge) {
+    container.innerHTML = origReihenfolge.join('');
+    origReihenfolge = null;
+  }
+}
+</script>
+<style>
+.sortable-ghost { opacity:0.4; background:#e0f2fe !important; border-radius:8px; }
+.drag-handle { cursor:grab; color:var(--muted); font-size:1.1rem; user-select:none; }
+.drag-handle:active { cursor:grabbing; }
+</style>
+
+{% endblock %}

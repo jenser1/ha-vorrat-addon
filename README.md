@@ -1,5 +1,8 @@
-[README.md](https://github.com/user-attachments/files/26481335/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
+
+[![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
+[![GitHub stars](https://img.shields.io/github/stars/jenser1/ha-vorrat-addon?style=social)](https://github.com/jenser1/ha-vorrat-addon)
+[![GitHub release](https://img.shields.io/github/v/release/jenser1/ha-vorrat-addon)](https://github.com/jenser1/ha-vorrat-addon/releases)
 
 Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezepten, Einkaufslisten, Web-Import und Dashboard-Sensoren.
 
@@ -55,11 +58,7 @@ Automatisch verfügbare HA-Sensoren:
 3. **Vorratsverwaltung** installieren & starten
 4. Über die HA-Sidebar öffnen
 
-### Über HACS
-1. HACS → ⋮ → **Custom repositories**
-2. URL: `https://github.com/jenser1/ha-vorrat-addon`
-3. Typ: **Add-on**
-4. **Vorratsverwaltung** installieren & starten
+
 
 ---
 

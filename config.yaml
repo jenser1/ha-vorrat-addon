@@ -1,6 +1,6 @@
 name: "Vorratsverwaltung"
 description: "Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import"
-version: "1.3.0"
+version: "1.4.0"
 slug: "vorratsverwaltung"
 url: "https://github.com/jenser1/ha-vorrat-addon"
 arch:

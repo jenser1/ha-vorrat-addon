@@ -11,22 +11,55 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
+    /* ── Farbthemen ── */
     :root {
-      --bg: #f0f2f5;
-      --card: #ffffff;
-      --primary: #3b82f6;
-      --primary-dark: #2563eb;
+      --nav-h: 64px;
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
       --danger: #ef4444;
       --warning: #f59e0b;
       --success: #10b981;
+    }
+
+    /* Hell-Modus (Standard) */
+    [data-theme="light"] {
+      --bg: #f0f2f5;
+      --card: #ffffff;
       --text: #1f2937;
       --muted: #6b7280;
       --border: #e5e7eb;
       --sidebar-bg: #1e293b;
       --sidebar-text: #cbd5e1;
-      --nav-h: 64px;
-      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --topbar-bg: #1e293b;
+      --topbar-text: white;
+      --input-bg: white;
     }
+
+    /* Dunkel-Modus */
+    [data-theme="dark"] {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --border: #334155;
+      --sidebar-bg: #0f172a;
+      --sidebar-text: #cbd5e1;
+      --topbar-bg: #0f172a;
+      --topbar-text: #e2e8f0;
+      --input-bg: #1e293b;
+    }
+
+    /* Farben: Blau (Standard) */
+    [data-farbe="blau"] { --primary: #3b82f6; --primary-dark: #2563eb; }
+    /* Grün */
+    [data-farbe="gruen"] { --primary: #10b981; --primary-dark: #059669; }
+    /* Lila */
+    [data-farbe="lila"] { --primary: #8b5cf6; --primary-dark: #7c3aed; }
+    /* Orange */
+    [data-farbe="orange"] { --primary: #f59e0b; --primary-dark: #d97706; }
+    /* Rot */
+    [data-farbe="rot"] { --primary: #ef4444; --primary-dark: #dc2626; }
+    /* Teal */
+    [data-farbe="teal"] { --primary: #14b8a6; --primary-dark: #0d9488; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -38,8 +71,8 @@
 
     /* ══ TOPBAR ══ */
     .topbar {
-      background: var(--sidebar-bg);
-      color: white;
+      background: var(--topbar-bg, var(--sidebar-bg));
+      color: var(--topbar-text, white);
       padding: 0 16px;
       height: 56px;
       display: flex;
@@ -239,7 +272,7 @@
       border-radius: 10px;
       font-size: 1rem; /* Verhindert iOS Zoom */
       color: var(--text);
-      background: white;
+      background: var(--input-bg, white);
       width: 100%;
       transition: border-color 0.15s;
       -webkit-appearance: none;
@@ -352,6 +385,7 @@
       }
 
       .main-wrap {
+        background: var(--bg);
         margin-left: 220px;
         flex: 1;
         display: flex;
@@ -360,15 +394,15 @@
       }
 
       .topbar {
-        background: white;
-        color: var(--text);
+        background: var(--topbar-bg, var(--sidebar-bg));
+        color: var(--topbar-text, white);
         border-bottom: 1px solid var(--border);
         box-shadow: none;
         height: auto;
         padding: 14px 24px;
       }
 
-      .topbar h1 { color: var(--text); font-size: 1.1rem; }
+      .topbar h1 { color: var(--topbar-text, var(--text)); font-size: 1.1rem; }
       .topbar-logo { display: none; }
 
       .content {
@@ -378,7 +412,7 @@
     }
   </style>
 </head>
-<body>
+<body data-theme="{{ theme }}" data-farbe="{{ farbe }}">
 
 <!-- Desktop Sidebar (nur ab 768px sichtbar) -->
 <nav class="sidebar" style="display:none">

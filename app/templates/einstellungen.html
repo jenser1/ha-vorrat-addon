@@ -54,6 +54,55 @@
         </div>
       </div>
 
+      <!-- Theme -->
+      <div class="form-group" style="margin-bottom:16px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          🌙 Erscheinungsbild
+        </label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          {% for code, label, icon in [('light','Hell','☀️'), ('dark','Dunkel','🌙')] %}
+          <label style="display:flex; align-items:center; gap:10px; padding:12px 14px;
+                         border:2px solid {{ 'var(--primary)' if settings.theme == code else 'var(--border)' }};
+                         border-radius:12px; cursor:pointer; background:{{ 'var(--card)' if settings.theme == code else 'var(--card)' }};
+                         transition: all 0.15s;">
+            <input type="radio" name="theme" value="{{ code }}"
+                   {{ 'checked' if settings.theme == code }}
+                   style="width:auto; display:none;" onchange="this.form.submit()">
+            <span style="font-size:1.3rem;">{{ icon }}</span>
+            <span style="font-size:0.9rem; font-weight:500;">{{ label }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Farbthema -->
+      <div class="form-group" style="margin-bottom:20px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          🎨 Farbthema
+        </label>
+        <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:10px;">
+          {% for code, label, farbe in [
+            ('blau','Blau','#3b82f6'),
+            ('gruen','Grün','#10b981'),
+            ('lila','Lila','#8b5cf6'),
+            ('orange','Orange','#f59e0b'),
+            ('rot','Rot','#ef4444'),
+            ('teal','Teal','#14b8a6')
+          ] %}
+          <label style="display:flex; align-items:center; gap:8px; padding:10px 12px;
+                         border:2px solid {{ 'var(--primary)' if settings.farbe == code else 'var(--border)' }};
+                         border-radius:12px; cursor:pointer; transition: all 0.15s;">
+            <input type="radio" name="farbe" value="{{ code }}"
+                   {{ 'checked' if settings.farbe == code }}
+                   style="width:auto; display:none;" onchange="this.form.submit()">
+            <span style="width:18px; height:18px; border-radius:50%; background:{{ farbe }}; flex-shrink:0;
+                         box-shadow: {{ '0 0 0 3px ' + farbe + '44' if settings.farbe == code else 'none' }};"></span>
+            <span style="font-size:0.85rem; font-weight:500;">{{ label }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
       <button type="submit" class="btn btn-primary" style="width:100%;">
         💾 {{ t.save }}
       </button>

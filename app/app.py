@@ -77,6 +77,8 @@ class Einstellungen(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sprache = db.Column(db.String(5), default="de")
     waehrung = db.Column(db.String(5), default="EUR")
+    theme = db.Column(db.String(20), default="light")
+    farbe = db.Column(db.String(20), default="blau")
 
 # ── PDF Extraktion ────────────────────────────────────────────────────────────
 
@@ -311,11 +313,23 @@ def index():
     if kat_filter:
         produkte = [p for p in produkte if p.kategorie == kat_filter]
     
+    # angebrochen-Status direkt per SQL laden (SQLAlchemy kennt neue Spalte nicht immer)
+    import sqlite3 as _sqlite3
+    try:
+        _conn = _sqlite3.connect(DB_PATH)
+        _angebrochen_ids = set(row[0] for row in _conn.execute(
+            "SELECT id FROM produkt WHERE angebrochen=1").fetchall())
+        _conn.close()
+    except:
+        _angebrochen_ids = set()
+
     for p in produkte:
         p.mhd_status = mhd_status(p.mhd)
+        p.ist_angebrochen = p.id in _angebrochen_ids
     
-    einkauf_count = EinkaufsListe.query.count()
-    
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
+    alle_listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
+
     return render_template("index.html",
         produkte=produkte,
         abgelaufen=abgelaufen,
@@ -324,6 +338,7 @@ def index():
         kategorien=kategorien,
         kat_filter=kat_filter,
         einkauf_count=einkauf_count,
+        alle_listen=alle_listen,
         heute=heute
     )
 
@@ -366,6 +381,27 @@ def produkt_bearbeiten(id):
         return redirect(url_for("index"))
     return render_template("produkt_form.html", produkt=p)
 
+@app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
+def produkt_angebrochen(id):
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    # Spalte anlegen falls nicht vorhanden
+    try:
+        conn.execute("ALTER TABLE produkt ADD COLUMN angebrochen BOOLEAN DEFAULT 0")
+        conn.commit()
+    except: pass
+    # Wert direkt per SQL toggeln
+    cur = conn.execute("SELECT angebrochen FROM produkt WHERE id=?", (id,))
+    row = cur.fetchone()
+    if row:
+        neu = 0 if row[0] else 1
+        conn.execute("UPDATE produkt SET angebrochen=? WHERE id=?", (neu, id))
+        conn.commit()
+    conn.close()
+    # SQLAlchemy Session leeren damit frische Daten geladen werden
+    db.session.expire_all()
+    return redirect(url_for("index"))
+
 @app.route("/produkt/<int:id>/loeschen", methods=["POST"])
 def produkt_loeschen(id):
     p = Produkt.query.get_or_404(id)
@@ -396,7 +432,7 @@ def einkauf():
     listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
     unter_mindest = Produkt.query.filter(Produkt.menge < Produkt.mindestmenge).all()
     nicht_zugeordnet = Produkt.query.filter_by(kategorie="Nicht zugeordnet").all()
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     return render_template("einkauf_uebersicht.html",
         listen=listen, unter_mindest=unter_mindest,
         nicht_zugeordnet=nicht_zugeordnet, einkauf_count=einkauf_count)
@@ -420,7 +456,7 @@ def einkauf_liste(liste_id):
     offene = Einkaufsliste.query.filter_by(liste_id=liste_id, erledigt=False).order_by(Einkaufsliste.position, Einkaufsliste.hinzugefuegt).all()
     erledigte = Einkaufsliste.query.filter_by(liste_id=liste_id, erledigt=True).all()
     gesamtpreis = sum(i.gesamtpreis or 0 for i in offene + erledigte)
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     return render_template("einkauf.html",
         liste=liste, alle_listen=alle_listen,
         offene=offene, erledigte=erledigte,
@@ -612,7 +648,7 @@ def rezepte():
     # Filter
     gefiltert = [r for r in alle if not kat_filter or r.kategorie == kat_filter]
 
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     return render_template("rezepte.html",
         rezepte=alle, gefiltert=gefiltert,
         kat_filter=kat_filter, sort=sort,
@@ -620,7 +656,7 @@ def rezepte():
 
 @app.route("/rezept/neu", methods=["GET", "POST"])
 def rezept_neu():
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     if request.method == "POST":
         quell_url = request.form.get("quell_url", "").strip()
         print(f"DEBUG rezept_neu: quell_url='{quell_url}'", flush=True)
@@ -651,7 +687,7 @@ def rezept_neu():
 @app.route("/rezept/<int:id>")
 def rezept_detail(id):
     r = Rezept.query.get_or_404(id)
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
     # Vorrat-Abgleich
     abgleich = []
@@ -668,7 +704,7 @@ def rezept_detail(id):
 @app.route("/rezept/<int:id>/bearbeiten", methods=["GET", "POST"])
 def rezept_bearbeiten(id):
     r = Rezept.query.get_or_404(id)
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     if request.method == "POST":
         r.name = request.form["name"]
         r.beschreibung = request.form.get("beschreibung", "")
@@ -728,7 +764,7 @@ def rezept_einkaufen(id):
 
 @app.route("/rezept/pdf-import", methods=["GET", "POST"])
 def rezept_pdf_import():
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     extrahierter_text = ""
     abschnitte = {}
     if request.method == "POST":
@@ -1235,7 +1271,7 @@ def rezept_web_debug():
 
 @app.route("/rezept/web-import", methods=["GET", "POST"])
 def rezept_web_import():
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     ergebnis = None
     url = ""
     fehler = None
@@ -1266,10 +1302,12 @@ def rezept_web_import():
 @app.route("/einstellungen", methods=["GET", "POST"])
 def einstellungen():
     s = get_settings()
-    einkauf_count = EinkaufsListe.query.count()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     if request.method == "POST":
         s.sprache = request.form.get("sprache", "de")
         s.waehrung = request.form.get("waehrung", "EUR")
+        s.theme = request.form.get("theme", "light")
+        s.farbe = request.form.get("farbe", "blau")
         db.session.commit()
         flash("settings_saved", "success")
         return redirect(url_for("einstellungen"))
@@ -1313,6 +1351,13 @@ def inject_globals():
     lang = getattr(g, 'lang', 'de')
     waehrung = getattr(g, 'waehrung', 'EUR')
     trans = TRANSLATIONS.get(lang, TRANSLATIONS['de'])
+    try:
+        s = Einstellungen.query.first()
+        theme = s.theme if s and s.theme else "light"
+        farbe = s.farbe if s and s.farbe else "blau"
+    except:
+        theme = "light"
+        farbe = "blau"
     return {
         't': trans,
         'lang': lang,
@@ -1321,6 +1366,8 @@ def inject_globals():
         'fmt_currency': fmt_currency,
         'alle_sprachen': LANGUAGES,
         'alle_waehrungen': CURRENCIES,
+        'theme': theme,
+        'farbe': farbe,
     }
 
 # ── Start ──────────────────────────────────────────────────────────────────────
@@ -1383,6 +1430,17 @@ def db_migrieren():
                 waehrung VARCHAR(5) DEFAULT 'EUR'
             )""")
             cur.execute("INSERT INTO einstellungen (sprache, waehrung) VALUES ('de', 'EUR')")
+            conn.commit()
+
+        if tabelle_existiert("produkt") and not spalte_existiert("produkt", "angebrochen"):
+            cur.execute("ALTER TABLE produkt ADD COLUMN angebrochen BOOLEAN DEFAULT 0")
+            conn.commit()
+
+        if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", "theme"):
+            cur.execute("ALTER TABLE einstellungen ADD COLUMN theme VARCHAR(20) DEFAULT 'light'")
+            conn.commit()
+        if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", "farbe"):
+            cur.execute("ALTER TABLE einstellungen ADD COLUMN farbe VARCHAR(20) DEFAULT 'blau'")
             conn.commit()
 
         if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):

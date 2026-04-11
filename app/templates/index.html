@@ -1,71 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Übersicht<!-- Einkaufsliste Modal -->
-<div id="einkauf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
-     z-index:999; align-items:center; justify-content:center;">
-  <div style="background:white; border-radius:16px; padding:24px; width:90%; max-width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
-    <h3 style="margin-bottom:16px; font-size:1rem;">🛒 Zur Einkaufsliste hinzufügen</h3>
-    <form method="post" id="einkauf-form">
-      <input type="hidden" name="name" id="modal-name">
-      <div class="form-group" style="margin-bottom:12px;">
-        <label>Liste auswählen</label>
-        <select name="liste_id" style="width:100%;">
-          {% for l in alle_listen %}
-            <option value="{{ l.id }}">🛒 {{ l.name }}</option>
-          {% endfor %}
-          {% if not alle_listen %}
-            <option value="">– Keine Liste vorhanden –</option>
-          {% endif %}
-        </select>
-      </div>
-      <div style="display:flex; gap:8px;">
-        <div class="form-group" style="flex:1;">
-          <label>Menge</label>
-          <input type="number" name="menge" id="modal-menge" value="1" step="0.1" min="0.1">
-        </div>
-        <div class="form-group" style="flex:1;">
-          <label>Einheit</label>
-          <input type="text" name="einheit" id="modal-einheit" readonly
-                 style="background:#f8fafc;">
-        </div>
-      </div>
-      <div style="display:flex; gap:8px; margin-top:16px;">
-        <button type="submit" class="btn btn-primary" style="flex:1;">➕ Hinzufügen</button>
-        <button type="button" class="btn btn-ghost" onclick="schliesseModal()">Abbrechen</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<script>
-function einkaufModal(id, name, einheit) {
-  {% if alle_listen %}
-  document.getElementById('modal-name').value = name;
-  document.getElementById('modal-einheit').value = einheit;
-  const listeId = document.querySelector('#einkauf-form select[name=liste_id]').value;
-  document.getElementById('einkauf-form').action = '/einkauf/liste/' + listeId + '/hinzufuegen';
-  // Formular action dynamisch setzen
-  document.querySelector('#einkauf-form select[name=liste_id]').addEventListener('change', function() {
-    document.getElementById('einkauf-form').action = '/einkauf/liste/' + this.value + '/hinzufuegen';
-  });
-  const modal = document.getElementById('einkauf-modal');
-  modal.style.display = 'flex';
-  {% else %}
-  alert('Bitte zuerst eine Einkaufsliste erstellen!');
-  window.location.href = '{{ url_for("einkauf") }}';
-  {% endif %}
-}
-
-function schliesseModal() {
-  document.getElementById('einkauf-modal').style.display = 'none';
-}
-
-// Außerhalb klicken schließt Modal
-document.getElementById('einkauf-modal').addEventListener('click', function(e) {
-  if (e.target === this) schliesseModal();
-});
-</script>
-
-{% endblock %}
+{% block title %}Übersicht{% endblock %}
 {% block page_title %}Übersicht{% endblock %}
 
 {% block topbar_actions %}
@@ -147,8 +81,22 @@ document.getElementById('einkauf-modal').addEventListener('click', function(e) {
       </thead>
       <tbody>
         {% for p in produkte %}
-        <tr>
-          <td><strong>{{ p.name }}</strong></td>
+        <tr style="
+          {%- if p.mhd_status == 'abgelaufen' -%}
+            outline: 2px solid #6b7280; outline-offset: -2px; border-radius:6px;
+          {%- elif p.mhd_status == 'kritisch' -%}
+            outline: 2px solid #ef4444; outline-offset: -2px; border-radius:6px;
+          {%- elif p.mhd_status == 'warnung' -%}
+            outline: 2px solid #d97706; outline-offset: -2px; border-radius:6px;
+          {%- elif p.menge < p.mindestmenge and p.mindestmenge > 0 -%}
+            outline: 2px solid #ef4444; outline-offset: -2px; border-radius:6px;
+          {%- elif p.ist_angebrochen -%}
+            outline: 2px solid #fb923c; outline-offset: -2px; border-radius:6px;
+          {%- endif -%}
+        ">
+          <td>
+            <strong>{{ p.name }}</strong>
+          </td>
           <td>
             <div class="stepper">
               <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
@@ -178,7 +126,17 @@ document.getElementById('einkauf-modal').addEventListener('click', function(e) {
           <td style="white-space:nowrap;">
             <!-- Zur Einkaufsliste hinzufügen -->
             <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
-                    onclick="einkaufModal('{{ p.id }}', '{{ p.name }}', '{{ p.einheit }}')">🛒</button>
+                    onclick="einkaufModal('{{ p.name }}', '{{ p.einheit }}')">🛒</button>
+            <form method="post" action="{{ url_for('produkt_angebrochen', id=p.id) }}" style="display:inline;">
+              <button type="submit" class="btn btn-sm"
+                      style="background:{{ '#fed7aa' if p.ist_angebrochen else 'transparent' }};
+                             border:2px solid {{ '#fb923c' if p.ist_angebrochen else 'var(--border)' }};
+                             color:{{ '#9a3412' if p.ist_angebrochen else 'var(--muted)' }};
+                             font-weight:{{ '700' if p.ist_angebrochen else '400' }};"
+                      title="{{ 'Angebrochen zurücksetzen' if p.ist_angebrochen else 'Als angebrochen markieren' }}">
+                A
+              </button>
+            </form>
             <a href="{{ url_for('produkt_bearbeiten', id=p.id) }}" class="btn btn-ghost btn-sm">✏️</a>
             <form method="post" action="{{ url_for('produkt_loeschen', id=p.id) }}" style="display:inline"
               onsubmit="return confirm('{{ p.name }} wirklich löschen?')">
@@ -198,5 +156,76 @@ document.getElementById('einkauf-modal').addEventListener('click', function(e) {
     </div>
   {% endif %}
 </div>
+
+
+<!-- Einkaufsliste Modal -->
+<div id="einkauf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+     z-index:999; align-items:center; justify-content:center;">
+  <div style="background:white; border-radius:16px; padding:24px; width:90%; max-width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <h3 style="margin-bottom:16px; font-size:1rem;">🛒 Zur Einkaufsliste hinzufügen</h3>
+    <form method="post" id="einkauf-form">
+      <input type="hidden" name="name" id="modal-name">
+      <div class="form-group" style="margin-bottom:12px;">
+        <label>Liste auswählen</label>
+        <select name="liste_id" id="modal-liste" style="width:100%;">
+          {% for l in alle_listen %}
+            <option value="{{ l.id }}">🛒 {{ l.name }}</option>
+          {% endfor %}
+          {% if not alle_listen %}
+            <option value="">– Keine Liste vorhanden –</option>
+          {% endif %}
+        </select>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <div class="form-group" style="flex:1;">
+          <label>Menge</label>
+          <input type="number" name="menge" id="modal-menge" value="1" step="0.1" min="0.1">
+        </div>
+        <div class="form-group" style="flex:1;">
+          <label>Einheit</label>
+          <input type="text" name="einheit" id="modal-einheit" readonly style="background:#f8fafc;">
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:16px;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">➕ Hinzufügen</button>
+        <button type="button" class="btn btn-ghost" onclick="schliesseModal()">Abbrechen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+// Basis-URL für Ingress-Kompatibilität
+const BASE = document.querySelector('base') ? document.querySelector('base').href.replace(/\/$/, '') : '';
+
+function einkaufModal(name, einheit) {
+  const listen = document.querySelectorAll('#modal-liste option');
+  if (listen.length === 0 || (listen.length === 1 && !listen[0].value)) {
+    alert('Bitte zuerst eine Einkaufsliste erstellen!');
+    window.location.href = '{{ url_for("einkauf") }}';
+    return;
+  }
+  document.getElementById('modal-name').value = name;
+  document.getElementById('modal-einheit').value = einheit;
+  const liste = document.getElementById('modal-liste');
+  // Formular-Action setzen
+  function setAction() {
+    if (liste.value) {
+      document.getElementById('einkauf-form').action = '{{ url_for("einkauf_hinzufuegen", liste_id=0) }}'.replace('/0/', '/' + liste.value + '/');
+    }
+  }
+  setAction();
+  liste.addEventListener('change', setAction);
+  document.getElementById('einkauf-modal').style.display = 'flex';
+}
+
+function schliesseModal() {
+  document.getElementById('einkauf-modal').style.display = 'none';
+}
+
+document.getElementById('einkauf-modal').addEventListener('click', function(e) {
+  if (e.target === this) schliesseModal();
+});
+</script>
 
 {% endblock %}

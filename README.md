@@ -4,6 +4,14 @@
 [![GitHub stars](https://img.shields.io/github/stars/jenser1/ha-vorrat-addon?style=social)](https://github.com/jenser1/ha-vorrat-addon)
 [![GitHub release](https://img.shields.io/github/v/release/jenser1/ha-vorrat-addon)](https://github.com/jenser1/ha-vorrat-addon/releases)
 
+[README.md](https://github.com/user-attachments/files/26644985/README.md)
+
+# 🥫 Vorratsverwaltung – Home Assistant Add-on
+
+[![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
+[![GitHub stars](https://img.shields.io/github/stars/jenser1/ha-vorrat-addon?style=social)](https://github.com/jenser1/ha-vorrat-addon)
+[![GitHub release](https://img.shields.io/github/v/release/jenser1/ha-vorrat-addon)](https://github.com/jenser1/ha-vorrat-addon/releases)
+
 Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezepten, Einkaufslisten, Web-Import und Dashboard-Sensoren.
 
 ---
@@ -84,6 +92,14 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 ---
 
 ## 📝 Changelog
+
+### 1.4.0
+- 🎨 Hell/Dunkel-Modus & 6 Farbthemen in den Einstellungen
+- 📦 Angebrochen-Status mit orangem Rahmen
+- 🟠 Farbränder für MHD-Warnung, abgelaufen und Mindestmenge
+- 🛒 Produkte direkt aus Übersicht zur Einkaufsliste hinzufügen
+- ↓ Nullbestände automatisch ans Ende sortiert
+- 🌐 Quell-URL beim Web-Import gespeichert
 
 ### 1.3.0
 - 🛒 Produkte direkt aus der Übersicht zur Einkaufsliste hinzufügen

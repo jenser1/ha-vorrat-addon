@@ -58,6 +58,23 @@
         <input type="date" name="mhd"
           value="{{ produkt.mhd.strftime('%Y-%m-%d') if produkt and produkt.mhd else '' }}">
       </div>
+
+      <div class="form-group">
+        <label>Gebindegröße
+          <span style="font-size:0.75rem; color:var(--muted); font-weight:400;">
+            (optional – z.B. 12 für 12er-Kiste, 0 = kein Gebinde)
+          </span>
+        </label>
+        <input type="number" name="gebinde" min="0" step="1"
+          value="{{ produkt.gebinde_wert if produkt and produkt.gebinde_wert else 0 }}"
+          placeholder="0">
+        {% if produkt and produkt.gebinde and produkt.gebinde > 1 %}
+        <div style="font-size:0.8rem; color:var(--primary); margin-top:4px;">
+          ℹ️ +/- Buttons erhöhen/verringern um {{ produkt.gebinde }} {{ produkt.einheit }}
+          (= 1 Gebinde à {{ produkt.gebinde }} Stück)
+        </div>
+        {% endif %}
+      </div>
     </div>
 
     <div style="display: flex; gap: 12px; margin-top: 24px;">

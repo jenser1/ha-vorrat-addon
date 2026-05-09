@@ -98,6 +98,53 @@
             <strong>{{ p.name }}</strong>
           </td>
           <td>
+            {% if p.gebinde_wert and p.gebinde_wert > 1 %}
+            <!-- Zwei Stepper: Kiste und Einzelstück -->
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <!-- Kisten-Stepper -->
+              <div class="stepper" style="justify-content:center;">
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                  <input type="hidden" name="aktion" value="verringern">
+                  <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
+                  <button type="submit" title="{{ p.gebinde_wert }} {{ p.einheit }} entfernen"
+                          style="background:#fef3c7; border-color:#f59e0b; font-size:0.7rem; padding:4px 8px;">
+                    − Kiste
+                  </button>
+                </form>
+                <span style="font-size:0.72rem; color:var(--muted); min-width:55px; text-align:center;">
+                  📦 à {{ p.gebinde_wert }}
+                </span>
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                  <input type="hidden" name="aktion" value="erhoehen">
+                  <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
+                  <button type="submit" title="{{ p.gebinde_wert }} {{ p.einheit }} hinzufügen"
+                          style="background:#fef3c7; border-color:#f59e0b; font-size:0.7rem; padding:4px 8px;">
+                    + Kiste
+                  </button>
+                </form>
+              </div>
+              <!-- Einzel-Stepper -->
+              <div class="stepper" style="justify-content:center;">
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                  <input type="hidden" name="aktion" value="verringern">
+                  <input type="hidden" name="wert" value="1">
+                  <button type="submit" title="1 {{ p.einheit }} entfernen">−</button>
+                </form>
+                <span class="menge-wert" style="color:{{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
+                  {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
+                  <span style="display:block; font-size:0.68rem; color:var(--muted);">
+                    = {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten
+                  </span>
+                </span>
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                  <input type="hidden" name="aktion" value="erhoehen">
+                  <input type="hidden" name="wert" value="1">
+                  <button type="submit" title="1 {{ p.einheit }} hinzufügen">+</button>
+                </form>
+              </div>
+            </div>
+            {% else %}
+            <!-- Normaler Stepper -->
             <div class="stepper">
               <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
                 <input type="hidden" name="aktion" value="verringern">
@@ -113,6 +160,7 @@
                 <button type="submit">+</button>
               </form>
             </div>
+            {% endif %}
           </td>
           <td>{{ p.lagerort or '–' }}</td>
           <td>
@@ -126,7 +174,7 @@
           <td style="white-space:nowrap;">
             <!-- Zur Einkaufsliste hinzufügen -->
             <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
-                    onclick="einkaufModal('{{ p.name }}', '{{ p.einheit }}')">🛒</button>
+                    onclick="einkaufModal('{{ p.name }}', '{{ p.einheit }}', {{ p.gebinde_wert or 0 }})">🛒</button>
             <form method="post" action="{{ url_for('produkt_angebrochen', id=p.id) }}" style="display:inline;">
               <button type="submit" class="btn btn-sm"
                       style="background:{{ '#fed7aa' if p.ist_angebrochen else 'transparent' }};
@@ -159,72 +207,110 @@
 
 
 <!-- Einkaufsliste Modal -->
-<div id="einkauf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
-     z-index:999; align-items:center; justify-content:center;">
-  <div style="background:white; border-radius:16px; padding:24px; width:90%; max-width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
-    <h3 style="margin-bottom:16px; font-size:1rem;">🛒 Zur Einkaufsliste hinzufügen</h3>
-    <form method="post" id="einkauf-form">
-      <input type="hidden" name="name" id="modal-name">
-      <div class="form-group" style="margin-bottom:12px;">
-        <label>Liste auswählen</label>
-        <select name="liste_id" id="modal-liste" style="width:100%;">
+<div id="einkauf-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+  <div style="background:var(--card,white); border-radius:16px; padding:24px; width:90%; max-width:380px;">
+    <h3 style="margin-bottom:16px; font-size:1rem;">🛒 Zur Einkaufsliste</h3>
+    <form id="einkauf-form" method="post" action="">
+      <input type="hidden" name="name" id="m-name">
+      <input type="hidden" name="einheit" id="m-einheit">
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:0.82rem; font-weight:600;">Liste</label>
+        <select id="m-liste" style="width:100%; padding:10px; border:1px solid #e5e7eb; border-radius:8px; font-size:1rem; margin-top:4px;">
           {% for l in alle_listen %}
-            <option value="{{ l.id }}">🛒 {{ l.name }}</option>
+            <option value="{{ l.id }}">{{ l.name }}</option>
           {% endfor %}
-          {% if not alle_listen %}
-            <option value="">– Keine Liste vorhanden –</option>
-          {% endif %}
         </select>
       </div>
-      <div style="display:flex; gap:8px;">
-        <div class="form-group" style="flex:1;">
-          <label>Menge</label>
-          <input type="number" name="menge" id="modal-menge" value="1" step="0.1" min="0.1">
-        </div>
-        <div class="form-group" style="flex:1;">
-          <label>Einheit</label>
-          <input type="text" name="einheit" id="modal-einheit" readonly style="background:#f8fafc;">
+
+      <!-- Kisten Hilfe – nur bei Gebinde -->
+      <div id="m-gebinde-wahl" style="display:none; margin-bottom:12px; padding:10px; background:#eff6ff; border-radius:10px; font-size:0.85rem; color:#1e40af;">
+        📦 Gebindegröße: <strong id="m-gebinde-zahl"></strong> Stück<br>
+        <span style="font-size:0.78rem; color:#3b82f6;">Menge wird automatisch umgerechnet (z.B. 2 Kisten = 2 × <span id="m-gebinde-zahl2"></span> Stück)</span>
+        <div style="display:flex; gap:8px; margin-top:8px; align-items:center;">
+          <label style="font-size:0.82rem; font-weight:600;">Kisten:</label>
+          <input type="number" id="m-kisten" value="1" min="1" step="1"
+                 style="width:70px; padding:6px; border:1px solid #bfdbfe; border-radius:8px; font-size:0.9rem;"
+                 oninput="kistenZuMenge()">
+          <span style="font-size:0.78rem; color:#3b82f6;">→ <span id="m-kisten-result"></span></span>
         </div>
       </div>
-      <div style="display:flex; gap:8px; margin-top:16px;">
-        <button type="submit" class="btn btn-primary" style="flex:1;">➕ Hinzufügen</button>
-        <button type="button" class="btn btn-ghost" onclick="schliesseModal()">Abbrechen</button>
+
+      <div style="display:flex; gap:8px; margin-bottom:16px;">
+        <div style="flex:1;">
+          <label id="m-menge-label" style="font-size:0.82rem; font-weight:600;">Menge</label>
+          <input type="number" name="menge" id="m-menge" value="1" min="0.1" step="0.1"
+                 style="width:100%; padding:10px; border:1px solid #e5e7eb; border-radius:8px; font-size:1rem; margin-top:4px;">
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px;">
+        <button type="button" onclick="submitModal()"
+                style="flex:1; padding:12px; background:#3b82f6; color:white; border:none; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer;">
+          ➕ Hinzufügen
+        </button>
+        <button type="button" onclick="document.getElementById('einkauf-modal').style.display='none'"
+                style="padding:12px 16px; background:transparent; border:1px solid #e5e7eb; border-radius:10px; font-size:1rem; cursor:pointer;">
+          ✕
+        </button>
       </div>
     </form>
   </div>
 </div>
 
 <script>
-// Basis-URL für Ingress-Kompatibilität
-const BASE = document.querySelector('base') ? document.querySelector('base').href.replace(/\/$/, '') : '';
+var _gebinde = 0;
 
-function einkaufModal(name, einheit) {
-  const listen = document.querySelectorAll('#modal-liste option');
-  if (listen.length === 0 || (listen.length === 1 && !listen[0].value)) {
+document.getElementById('m-liste').addEventListener('change', function() {
+  setFormAction(this.value);
+});
+
+function setFormAction(lid) {
+  var base = '{{ url_for("einkauf_hinzufuegen", liste_id=0) }}';
+  document.getElementById('einkauf-form').action = base.replace('0', lid);
+}
+
+function kistenZuMenge() {
+  var kisten = parseFloat(document.getElementById('m-kisten').value) || 1;
+  var total = kisten * _gebinde;
+  document.getElementById('m-kisten-result').textContent = total + ' Stück';
+  document.getElementById('m-menge').value = total;
+}
+
+function submitModal() {
+  document.getElementById('einkauf-form').submit();
+}
+
+function einkaufModal(name, einheit, gebinde) {
+  var liste = document.getElementById('m-liste');
+  if (!liste || liste.options.length === 0) {
     alert('Bitte zuerst eine Einkaufsliste erstellen!');
-    window.location.href = '{{ url_for("einkauf") }}';
     return;
   }
-  document.getElementById('modal-name').value = name;
-  document.getElementById('modal-einheit').value = einheit;
-  const liste = document.getElementById('modal-liste');
-  // Formular-Action setzen
-  function setAction() {
-    if (liste.value) {
-      document.getElementById('einkauf-form').action = '{{ url_for("einkauf_hinzufuegen", liste_id=0) }}'.replace('/0/', '/' + liste.value + '/');
-    }
+  _gebinde = parseInt(gebinde) || 0;
+
+  document.getElementById('m-name').value = name;
+  document.getElementById('m-einheit').value = einheit;
+  document.getElementById('m-menge').value = 1;
+  setFormAction(liste.value);
+
+  if (_gebinde > 1) {
+    document.getElementById('m-gebinde-wahl').style.display = 'block';
+    document.getElementById('m-gebinde-zahl').textContent = _gebinde;
+    document.getElementById('m-gebinde-zahl2').textContent = _gebinde;
+    document.getElementById('m-kisten').value = 1;
+    document.getElementById('m-kisten-result').textContent = _gebinde + ' Stück';
+    document.getElementById('m-menge').value = _gebinde;
+  } else {
+    document.getElementById('m-gebinde-wahl').style.display = 'none';
+    document.getElementById('m-menge').value = 1;
   }
-  setAction();
-  liste.addEventListener('change', setAction);
+
   document.getElementById('einkauf-modal').style.display = 'flex';
 }
 
-function schliesseModal() {
-  document.getElementById('einkauf-modal').style.display = 'none';
-}
-
 document.getElementById('einkauf-modal').addEventListener('click', function(e) {
-  if (e.target === this) schliesseModal();
+  if (e.target === this) this.style.display = 'none';
 });
 </script>
 

@@ -1,7 +1,7 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, g
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
-import os, re, pdfplumber, tempfile, json, requests
+import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time
 from bs4 import BeautifulSoup
 from translations import TRANSLATIONS, CURRENCIES, LANGUAGES, get_translation, format_currency
 
@@ -254,7 +254,76 @@ def pdf_text_extrahieren(pfad):
     abschnitte = pdf_abschnitte_erkennen(links_text, rechts_text, gesamt)
     return gesamt, abschnitte
 
+# ── Ingress Middleware ─────────────────────────────────────────────────────────
+
+class ReverseProxied:
+    """Middleware für HA Ingress – setzt SCRIPT_NAME aus X-Ingress-Path Header."""
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        script_name = environ.get("HTTP_X_INGRESS_PATH", "")
+        if script_name:
+            environ["SCRIPT_NAME"] = script_name
+            path = environ.get("PATH_INFO", "")
+            if path.startswith(script_name):
+                environ["PATH_INFO"] = path[len(script_name):]
+        return self.app(environ, start_response)
+
+app.wsgi_app = ReverseProxied(app.wsgi_app)
+
 # ── Einstellungen Helfer ─────────────────────────────────────────────────────────
+
+def get_settings():
+    """Gibt aktuelle Einstellungen zurück (oder Defaults)."""
+    s = Einstellungen.query.first()
+    if not s:
+        s = Einstellungen(sprache="de", waehrung="EUR", theme="light", farbe="blau")
+        db.session.add(s)
+        db.session.commit()
+    return s
+
+def t(key):
+    lang = getattr(g, 'lang', 'de')
+    return TRANSLATIONS.get(lang, TRANSLATIONS['de']).get(key, key)
+
+def fmt_currency(amount):
+    currency = getattr(g, 'waehrung', 'EUR')
+    return format_currency(amount, currency)
+
+@app.before_request
+def load_settings():
+    try:
+        s = Einstellungen.query.first()
+        g.lang = s.sprache if s else "de"
+        g.waehrung = s.waehrung if s else "EUR"
+    except:
+        g.lang = "de"
+        g.waehrung = "EUR"
+
+@app.context_processor
+def inject_globals():
+    lang = getattr(g, 'lang', 'de')
+    waehrung = getattr(g, 'waehrung', 'EUR')
+    trans = TRANSLATIONS.get(lang, TRANSLATIONS['de'])
+    try:
+        s = Einstellungen.query.first()
+        theme = s.theme if s and s.theme else "light"
+        farbe = s.farbe if s and s.farbe else "blau"
+    except:
+        theme = "light"
+        farbe = "blau"
+    return {
+        't': trans,
+        'lang': lang,
+        'waehrung': waehrung,
+        'waehrung_symbol': CURRENCIES.get(waehrung, CURRENCIES['EUR'])['symbol'],
+        'fmt_currency': fmt_currency,
+        'alle_sprachen': LANGUAGES,
+        'alle_waehrungen': CURRENCIES,
+        'theme': theme,
+        'farbe': farbe,
+    }
 
 def get_settings():
     """Gibt aktuelle Einstellungen zurück (oder Defaults)."""
@@ -267,13 +336,11 @@ def get_settings():
 
 def t(key):
     """Übersetzung für aktuellen Request."""
-    from flask import g
     lang = getattr(g, 'lang', 'de')
     return TRANSLATIONS.get(lang, TRANSLATIONS['de']).get(key, key)
 
 def fmt_currency(amount):
     """Formatiert Betrag mit aktueller Währung."""
-    from flask import g
     currency = getattr(g, 'waehrung', 'EUR')
     return format_currency(amount, currency)
 
@@ -313,19 +380,21 @@ def index():
     if kat_filter:
         produkte = [p for p in produkte if p.kategorie == kat_filter]
     
-    # angebrochen-Status direkt per SQL laden (SQLAlchemy kennt neue Spalte nicht immer)
-    import sqlite3 as _sqlite3
+    # angebrochen und gebinde direkt per SQL laden
     try:
-        _conn = _sqlite3.connect(DB_PATH)
-        _angebrochen_ids = set(row[0] for row in _conn.execute(
-            "SELECT id FROM produkt WHERE angebrochen=1").fetchall())
+        _conn = sqlite3.connect(DB_PATH)
+        _rows = _conn.execute("SELECT id, angebrochen, gebinde FROM produkt").fetchall()
         _conn.close()
+        _angebrochen_ids = set(r[0] for r in _rows if r[1])
+        _gebinde_map = {r[0]: int(r[2] or 0) for r in _rows}
     except:
         _angebrochen_ids = set()
+        _gebinde_map = {}
 
     for p in produkte:
         p.mhd_status = mhd_status(p.mhd)
         p.ist_angebrochen = p.id in _angebrochen_ids
+        p.gebinde_wert = _gebinde_map.get(p.id, 0)
     
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     alle_listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
@@ -360,6 +429,12 @@ def produkt_neu():
         )
         db.session.add(p)
         db.session.commit()
+        # Gebinde direkt per SQL speichern
+        gebinde_val = int(request.form.get("gebinde", 0) or 0)
+        if gebinde_val > 0:
+            with db.engine.connect() as conn:
+                conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": p.id})
+                conn.commit()
         flash(f"'{p.name}' wurde hinzugefügt.", "success")
         return redirect(url_for("index"))
     return render_template("produkt_form.html", produkt=None)
@@ -377,29 +452,32 @@ def produkt_bearbeiten(id):
         mhd_str = request.form.get("mhd")
         p.mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
         db.session.commit()
+        # Gebinde direkt per SQL speichern
+        gebinde_val = int(request.form.get("gebinde", 0) or 0)
+        print(f"DEBUG: Speichere gebinde={gebinde_val} für id={id}", flush=True)
+        with db.engine.connect() as conn:
+            conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": id})
+            conn.commit()
+        print(f"DEBUG: Gespeichert!", flush=True)
         flash(f"'{p.name}' wurde gespeichert.", "success")
         return redirect(url_for("index"))
+    # Gebinde-Wert direkt per SQL laden
+    try:
+        with db.engine.connect() as conn:
+            row = conn.execute(db.text("SELECT gebinde FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+            p.gebinde_wert = int(row[0] or 0) if row else 0
+    except:
+        p.gebinde_wert = 0
     return render_template("produkt_form.html", produkt=p)
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH)
-    # Spalte anlegen falls nicht vorhanden
-    try:
-        conn.execute("ALTER TABLE produkt ADD COLUMN angebrochen BOOLEAN DEFAULT 0")
-        conn.commit()
-    except: pass
-    # Wert direkt per SQL toggeln
-    cur = conn.execute("SELECT angebrochen FROM produkt WHERE id=?", (id,))
-    row = cur.fetchone()
-    if row:
-        neu = 0 if row[0] else 1
-        conn.execute("UPDATE produkt SET angebrochen=? WHERE id=?", (neu, id))
-        conn.commit()
-    conn.close()
-    # SQLAlchemy Session leeren damit frische Daten geladen werden
-    db.session.expire_all()
+    with db.engine.connect() as conn:
+        row = conn.execute(db.text("SELECT angebrochen FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+        if row:
+            neu = 0 if row[0] else 1
+            conn.execute(db.text("UPDATE produkt SET angebrochen=:val WHERE id=:id"), {"val": neu, "id": id})
+            conn.commit()
     return redirect(url_for("index"))
 
 @app.route("/produkt/<int:id>/loeschen", methods=["POST"])
@@ -571,7 +649,7 @@ def einkauf_bestand_nachbuchen(id):
 def einkauf_sortieren(liste_id):
     """Speichert neue Reihenfolge per Drag & Drop (JSON-Liste von IDs)."""
     import json as _json
-    reihenfolge = _json.loads(request.data or "[]")
+    reihenfolge = json.loads(request.data or "[]")
     for pos, item_id in enumerate(reihenfolge):
         e = Einkaufsliste.query.get(item_id)
         if e and e.liste_id == liste_id:
@@ -659,7 +737,6 @@ def rezept_neu():
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     if request.method == "POST":
         quell_url = request.form.get("quell_url", "").strip()
-        print(f"DEBUG rezept_neu: quell_url='{quell_url}'", flush=True)
         r = Rezept(
             name=request.form["name"],
             beschreibung=request.form.get("beschreibung", ""),
@@ -1036,36 +1113,24 @@ def kaufland_extrahieren(soup):
     return ergebnis
 
 def lidl_api_abrufen(url):
-    """Ruft Lidl Rezept direkt über die API ab."""
-    # Rezept-ID aus URL extrahieren – letzte Zahl in der URL
+    """Ruft Lidl Rezept direkt über die API ab (oft blockiert)."""
     alle_ids = re.findall(r"(\d{4,8})", url)
     if not alle_ids:
-        print("  Lidl: Keine ID in URL gefunden", flush=True)
         return None
-    recipe_id = alle_ids[-1]  # letzte Zahl nehmen
-
-    # Alle bekannten API-Pfade probieren
+    recipe_id = alle_ids[-1]
     api_pfade = [
         f"https://www.lidl-kochen.de/api/recipes/{recipe_id}",
         f"https://www.lidl-kochen.de/api/v2/recipes/{recipe_id}",
         f"https://www.lidl-kochen.de/api/recipe/{recipe_id}",
-        f"https://www.lidl-kochen.de/api/v1/recipes/{recipe_id}",
-        f"https://www.lidl-kochen.de/api/recipes/{recipe_id}?locale=de_DE",
     ]
-
     headers_api = {**HEADERS, "Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
-
     for api_url in api_pfade:
-        print(f"  Lidl API Versuch: {api_url}", flush=True)
         try:
             resp = requests.get(api_url, headers=headers_api, timeout=10)
-            print(f"  Lidl API Status: {resp.status_code}", flush=True)
             if resp.status_code == 200:
-                data = resp.json()
-                print(f"  Lidl API OK! Keys: {list(data.keys()) if isinstance(data, dict) else 'Liste'}", flush=True)
-                return data
-        except Exception as e:
-            print(f"  Lidl API Fehler: {e}", flush=True)
+                return resp.json()
+        except Exception:
+            pass
     return None
 
 def lidl_extrahieren(soup, url=""):
@@ -1154,35 +1219,6 @@ def rezept_von_url(url):
         except: pass
     og = soup.find("meta", attrs={"property":"og:description"})
     meta = soup.find("meta", attrs={"name":"description"})
-    klassen = list(set(k for el in soup.find_all(True) for k in el.get("class",[])
-                   if any(x in k.lower() for x in ["recipe","rezept","ingredient","zutat","step","zubereitung"])))[:20]
-    print(f"=== WEB-DEBUG {url[:80]} ===", flush=True)
-    print(f"  LD+JSON Typen : {ld_typen}", flush=True)
-    print(f"  Rezept-Klassen: {klassen}", flush=True)
-    if "kaufland" in url.lower():
-        steps = soup.select(".t-recipes-detail__cooking-step")
-        descs = soup.select(".t-recipes-detail__cooking-description")
-        print(f"  cooking-steps gefunden: {len(steps)}", flush=True)
-        print(f"  cooking-descriptions gefunden: {len(descs)}", flush=True)
-        for i, d in enumerate(descs, 1):
-            print(f"    Desc {i}: {d.get_text(strip=True)[:100]}", flush=True)
-    if "lidl" in url.lower():
-        # ingredient__name__text direkt testen
-        namen = soup.select(".ingredient__name__text")
-        print(f"  ingredient__name__text: {len(namen)} gefunden", flush=True)
-        for n in namen[:5]:
-            print(f"    Name: {n.get_text(strip=True)[:60]}", flush=True)
-        # ingredients-table Zeilen
-        zeilen = soup.select(".ingredients-table tr")
-        print(f"  ingredients-table tr: {len(zeilen)}", flush=True)
-        for z in zeilen[:5]:
-            print(f"    Zeile: {z.get_text(strip=True)[:80]}", flush=True)
-        # ingredients__data
-        data_els = soup.select(".ingredients__data")
-        print(f"  ingredients__data: {len(data_els)}", flush=True)
-        for d in data_els[:3]:
-            print(f"    Data: {d.get_text(strip=True)[:80]}", flush=True)
-
     def beschreibung_ergaenzen(ergebnis, soup):
         """Ergänzt leere Beschreibung aus Meta-Tags."""
         if not ergebnis.get("beschreibung"):
@@ -1194,80 +1230,10 @@ def rezept_von_url(url):
         return ergebnis
 
     # 1. Seiten-spezifische Parser
-    if "kaufland" in domain:
-        ergebnis = schema_org_extrahieren(soup)
-        if not ergebnis or not ergebnis.get("zutaten"):
-            ergebnis = kaufland_extrahieren(soup)
-        if ergebnis and ergebnis.get("titel"):
-            return beschreibung_ergaenzen(ergebnis, soup), None
 
-    elif "lidl-kochen" in domain or "lidl.de" in domain:
-        ergebnis = schema_org_extrahieren(soup)
-        if not ergebnis or not ergebnis.get("zutaten"):
-            ergebnis = lidl_extrahieren(soup, url)
-        if ergebnis and ergebnis.get("titel"):
-            return beschreibung_ergaenzen(ergebnis, soup), None
+        conn.close()
 
-    # 2. Generisch: Schema.org JSON-LD
-    ergebnis = schema_org_extrahieren(soup)
-    if ergebnis and ergebnis["titel"] and (ergebnis["zutaten"] or ergebnis["anleitung"]):
-        return beschreibung_ergaenzen(ergebnis, soup), None
-
-    # 3. HTML-Heuristik
-    ergebnis = fallback_extrahieren(soup, url)
-    if ergebnis["titel"] or ergebnis["zutaten"]:
-        return beschreibung_ergaenzen(ergebnis, soup), None
-
-    return None, "Kein Rezept auf dieser Seite gefunden. Versuche eine andere URL."
-
-@app.route("/rezept/web-debug", methods=["GET", "POST"])
-def rezept_web_debug():
-    """Zeigt was die Seite wirklich liefert – für Debugging."""
-    if request.method == "GET":
-        return """<form method="post" style="padding:20px;font-family:sans-serif">
-            <input name="url" style="width:500px;padding:8px" placeholder="https://..."><br><br>
-            <button type="submit" style="padding:8px 16px">Analysieren</button>
-        </form>"""
-    url = request.form.get("url", "").strip()
-    if not url.startswith("http"):
-        url = "https://" + url
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.encoding = resp.apparent_encoding
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Schema.org Blöcke
-        ld_json = []
-        for tag in soup.find_all("script", type="application/ld+json"):
-            try:
-                import json as _j
-                data = _j.loads(tag.string or "")
-                t = data.get("@type","?") if isinstance(data,dict) else [d.get("@type","?") for d in data if isinstance(d,dict)]
-                ld_json.append(str(t))
-            except: pass
-
-        # Meta Tags
-        og_desc = soup.find("meta", attrs={"property":"og:description"})
-        meta_desc = soup.find("meta", attrs={"name":"description"})
-
-        # Erste 20 Klassen im HTML
-        alle_klassen = []
-        for el in soup.find_all(True):
-            for k in el.get("class", []):
-                if k not in alle_klassen and ("recipe" in k.lower() or "rezept" in k.lower() or "ingredient" in k.lower() or "zutat" in k.lower() or "step" in k.lower() or "zubereitung" in k.lower()):
-                    alle_klassen.append(k)
-
-        info = {
-            "status": resp.status_code,
-            "ld_json_types": ld_json,
-            "og_description": og_desc.get("content","")[:100] if og_desc else "FEHLT",
-            "meta_description": meta_desc.get("content","")[:100] if meta_desc else "FEHLT",
-            "rezept_klassen": alle_klassen[:30],
-        }
-        ausgabe = str(info).replace(", ", ",\n")
-        return f"<pre style='font-size:13px;padding:20px'>{ausgabe}</pre>"
-    except Exception as e:
-        return f"Fehler: {e}"
+# ── Web Import Route ──────────────────────────────────────────────────────────
 
 @app.route("/rezept/web-import", methods=["GET", "POST"])
 def rezept_web_import():
@@ -1275,24 +1241,23 @@ def rezept_web_import():
     ergebnis = None
     url = ""
     fehler = None
+    debug = None
     if request.method == "POST":
         url = request.form.get("url", "").strip()
         if url:
             ergebnis, fehler = rezept_von_url(url)
             if fehler:
                 flash(fehler, "danger")
+            if ergebnis:
+                debug = {
+                    "quelle": ergebnis.get("quelle", "?"),
+                    "titel": "✅" if ergebnis.get("titel") else "❌",
+                    "beschreibung": "✅" if ergebnis.get("beschreibung") else "❌",
+                    "zutaten": f"✅ {len(ergebnis.get('zutaten', []))} Stück" if ergebnis.get("zutaten") else "❌",
+                    "anleitung": f"✅ {len(ergebnis.get('anleitung',''))} Zeichen" if ergebnis.get("anleitung") else "❌",
+                }
         else:
             flash("Bitte eine URL eingeben.", "danger")
-    # Debug-Info: was wurde gefunden?
-    debug = None
-    if ergebnis:
-        debug = {
-            "quelle": ergebnis.get("quelle", "?"),
-            "titel": "✅" if ergebnis.get("titel") else "❌",
-            "beschreibung": "✅" if ergebnis.get("beschreibung") else "❌",
-            "zutaten": f"✅ {len(ergebnis.get('zutaten', []))} Stück" if ergebnis.get("zutaten") else "❌",
-            "anleitung": f"✅ {len(ergebnis.get('anleitung',''))} Zeichen" if ergebnis.get("anleitung") else "❌",
-        }
     return render_template("rezept_web_import.html",
         ergebnis=ergebnis, url=url, fehler=fehler,
         debug=debug, einheiten=EINHEITEN, einkauf_count=einkauf_count)
@@ -1309,147 +1274,10 @@ def einstellungen():
         s.theme = request.form.get("theme", "light")
         s.farbe = request.form.get("farbe", "blau")
         db.session.commit()
-        flash("settings_saved", "success")
+        flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("einstellungen"))
     return render_template("einstellungen.html",
         settings=s, einkauf_count=einkauf_count)
-
-# ── Ingress Middleware ─────────────────────────────────────────────────────────
-
-class ReverseProxied:
-    """Middleware für HA Ingress – setzt SCRIPT_NAME aus X-Ingress-Path Header."""
-    def __init__(self, app):
-        self.app = app
-
-    def __call__(self, environ, start_response):
-        script_name = environ.get("HTTP_X_INGRESS_PATH", "")
-        if script_name:
-            environ["SCRIPT_NAME"] = script_name
-            path = environ.get("PATH_INFO", "")
-            if path.startswith(script_name):
-                environ["PATH_INFO"] = path[len(script_name):]
-        return self.app(environ, start_response)
-
-app.wsgi_app = ReverseProxied(app.wsgi_app)
-
-@app.before_request
-def load_settings():
-    """Lädt Sprache und Währung in Flask g."""
-    from flask import g
-    try:
-        s = Einstellungen.query.first()
-        g.lang = s.sprache if s else "de"
-        g.waehrung = s.waehrung if s else "EUR"
-    except:
-        g.lang = "de"
-        g.waehrung = "EUR"
-
-@app.context_processor
-def inject_globals():
-    """Macht t(), Sprache und Währung in allen Templates verfügbar."""
-    from flask import g
-    lang = getattr(g, 'lang', 'de')
-    waehrung = getattr(g, 'waehrung', 'EUR')
-    trans = TRANSLATIONS.get(lang, TRANSLATIONS['de'])
-    try:
-        s = Einstellungen.query.first()
-        theme = s.theme if s and s.theme else "light"
-        farbe = s.farbe if s and s.farbe else "blau"
-    except:
-        theme = "light"
-        farbe = "blau"
-    return {
-        't': trans,
-        'lang': lang,
-        'waehrung': waehrung,
-        'waehrung_symbol': CURRENCIES.get(waehrung, CURRENCIES['EUR'])['symbol'],
-        'fmt_currency': fmt_currency,
-        'alle_sprachen': LANGUAGES,
-        'alle_waehrungen': CURRENCIES,
-        'theme': theme,
-        'farbe': farbe,
-    }
-
-# ── Start ──────────────────────────────────────────────────────────────────────
-
-def db_migrieren():
-    """Erstellt fehlende Tabellen und Spalten ohne Datenverlust."""
-    with app.app_context():
-        db.create_all()
-        # Fehlende Spalten in bestehenden Tabellen nachträglich hinzufügen
-        import sqlite3
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-
-        def spalte_existiert(tabelle, spalte):
-            cur.execute(f"PRAGMA table_info({tabelle})")
-            return any(row[1] == spalte for row in cur.fetchall())
-
-        def tabelle_existiert(tabelle):
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tabelle,))
-            return cur.fetchone() is not None
-
-        # einkaufs_liste Tabelle (neue Tabelle)
-        if not tabelle_existiert("einkaufs_liste"):
-            cur.execute("""CREATE TABLE einkaufs_liste (
-                id INTEGER PRIMARY KEY,
-                name VARCHAR(100) NOT NULL,
-                erstellt DATETIME DEFAULT CURRENT_TIMESTAMP
-            )""")
-            # Standard-Liste für bestehende Artikel
-            cur.execute("INSERT INTO einkaufs_liste (name) VALUES ('Einkauf')")
-            conn.commit()
-
-        # einkaufsliste: neue Spalten
-        if tabelle_existiert("einkaufsliste"):
-            if not spalte_existiert("einkaufsliste", "liste_id"):
-                cur.execute("ALTER TABLE einkaufsliste ADD COLUMN liste_id INTEGER REFERENCES einkaufs_liste(id)")
-                # Bestehende Artikel der Standard-Liste zuweisen
-                cur.execute("UPDATE einkaufsliste SET liste_id = (SELECT id FROM einkaufs_liste LIMIT 1)")
-                conn.commit()
-            if not spalte_existiert("einkaufsliste", "preis"):
-                cur.execute("ALTER TABLE einkaufsliste ADD COLUMN preis FLOAT")
-                conn.commit()
-            if not spalte_existiert("einkaufsliste", "einzelpreis"):
-                cur.execute("ALTER TABLE einkaufsliste ADD COLUMN einzelpreis FLOAT")
-                # Bestehende preis-Werte als einzelpreis übernehmen (geteilt durch Menge)
-                cur.execute("UPDATE einkaufsliste SET einzelpreis = preis WHERE preis IS NOT NULL AND menge > 0")
-                conn.commit()
-            if not spalte_existiert("einkaufsliste", "in_bestand"):
-                cur.execute("ALTER TABLE einkaufsliste ADD COLUMN in_bestand BOOLEAN DEFAULT 0")
-                conn.commit()
-            if not spalte_existiert("einkaufsliste", "position"):
-                cur.execute("ALTER TABLE einkaufsliste ADD COLUMN position INTEGER DEFAULT 0")
-                conn.commit()
-
-        # Einstellungen Tabelle
-        if not tabelle_existiert("einstellungen"):
-            cur.execute("""CREATE TABLE einstellungen (
-                id INTEGER PRIMARY KEY,
-                sprache VARCHAR(5) DEFAULT 'de',
-                waehrung VARCHAR(5) DEFAULT 'EUR'
-            )""")
-            cur.execute("INSERT INTO einstellungen (sprache, waehrung) VALUES ('de', 'EUR')")
-            conn.commit()
-
-        if tabelle_existiert("produkt") and not spalte_existiert("produkt", "angebrochen"):
-            cur.execute("ALTER TABLE produkt ADD COLUMN angebrochen BOOLEAN DEFAULT 0")
-            conn.commit()
-
-        if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", "theme"):
-            cur.execute("ALTER TABLE einstellungen ADD COLUMN theme VARCHAR(20) DEFAULT 'light'")
-            conn.commit()
-        if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", "farbe"):
-            cur.execute("ALTER TABLE einstellungen ADD COLUMN farbe VARCHAR(20) DEFAULT 'blau'")
-            conn.commit()
-
-        if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):
-            print("Migration: Füge quell_url Spalte hinzu...", flush=True)
-            cur.execute("ALTER TABLE rezept ADD COLUMN quell_url VARCHAR(500) DEFAULT ''")
-            conn.commit()
-            print("Migration quell_url: OK", flush=True)
-
-        conn.close()
 
 # ── HA Sensor Integration ─────────────────────────────────────────────────────
 
@@ -1546,7 +1374,84 @@ def ha_sensoren_aktualisieren():
     t = threading.Thread(target=update_loop, daemon=True)
     t.start()
 
+def db_migrieren():
+    """Erstellt fehlende Tabellen und Spalten ohne Datenverlust."""
+    with app.app_context():
+        db.create_all()
+        import sqlite3 as _sq
+        conn = _sq.connect(DB_PATH)
+        cur = conn.cursor()
+
+        def spalte_existiert(tabelle, spalte):
+            cur.execute(f"PRAGMA table_info({tabelle})")
+            return any(row[1] == spalte for row in cur.fetchall())
+
+        def tabelle_existiert(tabelle):
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tabelle,))
+            return cur.fetchone() is not None
+
+        # einkaufs_liste
+        if not tabelle_existiert("einkaufs_liste"):
+            cur.execute("""CREATE TABLE einkaufs_liste (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                erstellt DATETIME DEFAULT CURRENT_TIMESTAMP
+            )""")
+            cur.execute("INSERT INTO einkaufs_liste (name) VALUES ('Einkauf')")
+            conn.commit()
+
+        # einkaufsliste neue Spalten
+        if tabelle_existiert("einkaufsliste"):
+            for spalte, typ in [
+                ("liste_id", "INTEGER"),
+                ("einzelpreis", "FLOAT"),
+                ("in_bestand", "BOOLEAN DEFAULT 0"),
+                ("position", "INTEGER DEFAULT 0"),
+            ]:
+                if not spalte_existiert("einkaufsliste", spalte):
+                    cur.execute(f"ALTER TABLE einkaufsliste ADD COLUMN {spalte} {typ}")
+                    if spalte == "liste_id":
+                        cur.execute("UPDATE einkaufsliste SET liste_id = (SELECT id FROM einkaufs_liste LIMIT 1)")
+                    conn.commit()
+
+        # einstellungen
+        if not tabelle_existiert("einstellungen"):
+            cur.execute("""CREATE TABLE einstellungen (
+                id INTEGER PRIMARY KEY,
+                sprache VARCHAR(5) DEFAULT 'de',
+                waehrung VARCHAR(5) DEFAULT 'EUR',
+                theme VARCHAR(20) DEFAULT 'light',
+                farbe VARCHAR(20) DEFAULT 'blau'
+            )""")
+            cur.execute("INSERT INTO einstellungen (sprache, waehrung, theme, farbe) VALUES ('de','EUR','light','blau')")
+            conn.commit()
+
+        for spalte, typ in [
+            ("theme", "VARCHAR(20) DEFAULT 'light'"),
+            ("farbe", "VARCHAR(20) DEFAULT 'blau'"),
+        ]:
+            if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", spalte):
+                cur.execute(f"ALTER TABLE einstellungen ADD COLUMN {spalte} {typ}")
+                conn.commit()
+
+        # produkt neue Spalten
+        if tabelle_existiert("produkt") and not spalte_existiert("produkt", "angebrochen"):
+            cur.execute("ALTER TABLE produkt ADD COLUMN angebrochen BOOLEAN DEFAULT 0")
+            conn.commit()
+        if tabelle_existiert("produkt") and not spalte_existiert("produkt", "gebinde"):
+            cur.execute("ALTER TABLE produkt ADD COLUMN gebinde INTEGER DEFAULT 0")
+            conn.commit()
+
+        # rezept neue Spalten
+        if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):
+            cur.execute("ALTER TABLE rezept ADD COLUMN quell_url VARCHAR(500) DEFAULT ''")
+            conn.commit()
+
+        conn.close()
+
 if __name__ == "__main__":
     db_migrieren()
+    with app.app_context():
+        db.engine.dispose()
     ha_sensoren_aktualisieren()
     app.run(host="0.0.0.0", port=5000, debug=False)

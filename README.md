@@ -1,3 +1,4 @@
+[README.md](https://github.com/user-attachments/files/27548709/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 [![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
@@ -84,6 +85,12 @@ Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann w
 ---
 
 ## 📝 Changelog
+
+### 1.5.0
+- 📦 Gebinde-Funktion (Kisten, Pakete, etc.)
+- Zwei Stepper pro Produkt: Kiste und Einzelstück
+- Gebinde-Auswahl beim Zur-Einkaufsliste-Hinzufügen
+- 🔧 Code-Review und Bereinigung
 
 ### 1.4.0
 - 🎨 Hell/Dunkel-Modus & 6 Farbthemen in den Einstellungen

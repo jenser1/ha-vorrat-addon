@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/27548709/README.md)
+[README.md](https://github.com/user-attachments/files/27548950/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 [![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
@@ -81,6 +81,22 @@ entities:
 ## 📱 Als App installieren
 
 Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann wie eine native App im Vollbild.
+
+---
+
+## 🤝 Mitmachen & Feedback
+
+Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
+
+👉 **[Issue erstellen](https://github.com/jenser1/ha-vorrat-addon/issues/new)** – ich freue mich über jedes Feedback!
+
+**Bitte beschreibe bei Bugs:**
+- Was hast du gemacht?
+- Was ist passiert?
+- Was hast du erwartet?
+- Home Assistant Version & Hardware (z.B. Raspberry Pi 4)
+
+**Ideen & Feature-Wünsche** sind ebenfalls willkommen – einfach als Issue mit dem Label `enhancement` eintragen.
 
 ---
 

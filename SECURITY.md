@@ -1,4 +1,3 @@
-[SECURITY.md](https://github.com/user-attachments/files/27549096/SECURITY.md)
 # 🔒 Security Policy
 
 ## Unterstützte Versionen

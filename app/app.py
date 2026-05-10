@@ -274,23 +274,6 @@ app.wsgi_app = ReverseProxied(app.wsgi_app)
 
 # ── Einstellungen Helfer ─────────────────────────────────────────────────────────
 
-def get_settings():
-    """Gibt aktuelle Einstellungen zurück (oder Defaults)."""
-    s = Einstellungen.query.first()
-    if not s:
-        s = Einstellungen(sprache="de", waehrung="EUR", theme="light", farbe="blau")
-        db.session.add(s)
-        db.session.commit()
-    return s
-
-def t(key):
-    lang = getattr(g, 'lang', 'de')
-    return TRANSLATIONS.get(lang, TRANSLATIONS['de']).get(key, key)
-
-def fmt_currency(amount):
-    currency = getattr(g, 'waehrung', 'EUR')
-    return format_currency(amount, currency)
-
 @app.before_request
 def load_settings():
     try:
@@ -329,7 +312,7 @@ def get_settings():
     """Gibt aktuelle Einstellungen zurück (oder Defaults)."""
     s = Einstellungen.query.first()
     if not s:
-        s = Einstellungen(sprache="de", waehrung="EUR")
+        s = Einstellungen(sprache="de", waehrung="EUR", theme="light", farbe="blau")
         db.session.add(s)
         db.session.commit()
     return s
@@ -832,7 +815,7 @@ def rezept_einkaufen(id):
             existiert = Einkaufsliste.query.filter_by(liste_id=liste.id, name=z.name, erledigt=False).first()
             if not existiert:
                 fehlend = z.menge - (p.menge if p else 0)
-                e = Einkaufsliste(liste_id=liste.id, name=z.name, menge=max(fehlend, z.menge), einheit=z.einheit)
+                e = Einkaufsliste(liste_id=liste.id, name=z.name, menge=max(0, fehlend), einheit=z.einheit)
                 db.session.add(e)
                 hinzugefuegt += 1
     db.session.commit()
@@ -1230,8 +1213,19 @@ def rezept_von_url(url):
         return ergebnis
 
     # 1. Seiten-spezifische Parser
+    if "kaufland" in domain:
+        ergebnis = kaufland_extrahieren(soup)
+    elif "lidl" in domain:
+        ergebnis = lidl_extrahieren(soup, url)
+    else:
+        ergebnis = schema_org_extrahieren(soup)
 
-        conn.close()
+    ergebnis = beschreibung_ergaenzen(ergebnis, soup)
+
+    if not ergebnis.get("titel"):
+        return None, "Kein Rezept auf dieser Seite gefunden."
+
+    return ergebnis, None
 
 # ── Web Import Route ──────────────────────────────────────────────────────────
 

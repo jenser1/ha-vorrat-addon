@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/27562719/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 [![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
@@ -101,6 +100,13 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.5.2
+- 🐛 Doppelte Funktionsdefinitionen entfernt (get_settings, t, fmt_currency)
+- 🐛 Rezept-Einkauf: fehlende Menge wurde falsch berechnet
+- 🐛 Web-Import: Internal Server Error behoben (fehlende Parser-Logik)
+- 🔒 XSS-Fix: Produktnamen in JavaScript korrekt escaped
+- 🔒 Sicherheitsupdate: requests 2.32.3 → 2.33.0 (CVE: .netrc credentials leak)
 
 ### 1.5.1
 - 🔒 Sicherheitsupdate: requests 2.32.3, flask 3.1.1

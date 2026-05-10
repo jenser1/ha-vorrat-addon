@@ -1,4 +1,4 @@
-[README.md](https://github.com/user-attachments/files/27548950/README.md)
+[README.md](https://github.com/user-attachments/files/27562719/README.md)
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 [![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
@@ -101,6 +101,10 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.5.1
+- 🔒 Sicherheitsupdate: requests 2.32.3, flask 3.1.1
+- 📋 SECURITY.md hinzugefügt
 
 ### 1.5.0
 - 📦 Gebinde-Funktion (Kisten, Pakete, etc.)

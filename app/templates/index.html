@@ -7,6 +7,47 @@
 {% endblock %}
 
 {% block content %}
+<style>
+/* ── Mobile Karten-Ansicht für Produkte ── */
+@media (max-width: 640px) {
+  .table-wrap { overflow-x: visible; }
+
+  .table-wrap table,
+  .table-wrap tbody { display: block; }
+  .table-wrap thead { display: none; }
+
+  .table-wrap tr {
+    display: grid;
+    grid-template-areas:
+      "name    aktionen"
+      "menge   menge"
+      "infos   infos";
+    grid-template-columns: 1fr auto;
+    gap: 0;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    outline-offset: -1px !important;
+  }
+  .table-wrap tr:last-child td { border-bottom: none; }
+
+  .td-name     { grid-area: name;     padding: 0 0 8px 0; border-bottom: none; display: flex; align-items: center; }
+  .td-menge    { grid-area: menge;    padding: 8px 0;     border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); display: flex; justify-content: center; }
+  .td-infos    { grid-area: infos;    padding: 8px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border-bottom: none; }
+  .td-aktionen { grid-area: aktionen; padding: 0 0 8px 0; display: flex; align-items: center; gap: 4px; justify-content: flex-end; border-bottom: none; }
+
+  /* Info-Spalten in einer Zeile zusammenfassen */
+  .td-lagerort { font-size: 0.78rem; color: var(--muted); }
+  .td-lagerort::before { content: "📍 "; }
+
+  /* Desktop: td-infos als normale Zelle */
+
+  /* Stepper kompakter auf Mobile */
+  .stepper button { width: 40px; height: 40px; font-size: 1.2rem; }
+  .stepper .menge-wert { font-size: 1rem; min-width: 60px; }
+}
+</style>
 
 <!-- Stats -->
 <div class="stats">
@@ -73,9 +114,7 @@
         <tr>
           <th>Produkt</th>
           <th>Menge</th>
-          <th>Lagerort</th>
-          <th>MHD</th>
-          <th>Kategorie</th>
+          <th>Infos</th>
           <th>Aktionen</th>
         </tr>
       </thead>
@@ -94,10 +133,10 @@
             outline: 2px solid #fb923c; outline-offset: -2px; border-radius:6px;
           {%- endif -%}
         ">
-          <td>
+          <td class="td-name">
             <strong>{{ p.name }}</strong>
           </td>
-          <td>
+          <td class="td-menge">
             {% if p.gebinde_wert and p.gebinde_wert > 1 %}
             <!-- Zwei Stepper: Kiste und Einzelstück -->
             <div style="display:flex; flex-direction:column; gap:4px;">
@@ -162,16 +201,14 @@
             </div>
             {% endif %}
           </td>
-          <td>{{ p.lagerort or '–' }}</td>
-          <td>
+          <td class="td-infos">
+            {% if p.lagerort %}<span class="td-lagerort">{{ p.lagerort }}</span>{% endif %}
             {% if p.mhd %}
-              <span class="mhd-badge mhd-{{ p.mhd_status }}">
-                {{ p.mhd.strftime('%d.%m.%Y') }}
-              </span>
-            {% else %}–{% endif %}
+              <span class="mhd-badge mhd-{{ p.mhd_status }}">{{ p.mhd.strftime('%d.%m.%Y') }}</span>
+            {% endif %}
+            <span class="kat-tag">{{ p.kategorie }}</span>
           </td>
-          <td><span class="kat-tag">{{ p.kategorie }}</span></td>
-          <td style="white-space:nowrap;">
+          <td class="td-aktionen" style="white-space:nowrap;">
             <!-- Zur Einkaufsliste hinzufügen -->
             <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
                     onclick="einkaufModal({{ p.name | tojson }}, {{ p.einheit | tojson }}, {{ p.gebinde_wert or 0 }})">🛒</button>

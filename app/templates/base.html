@@ -312,6 +312,19 @@
     /* ══ FLASHES ══ */
     .flashes { margin-bottom: 14px; }
 
+    /* ══ MOBILE: Kleine Displays ══ */
+    @media (max-width: 480px) {
+      .content { padding: 10px; }
+      .stats { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .stat { padding: 10px; }
+      .stat-value { font-size: 1.4rem; }
+      .topbar { height: 48px; }
+      .topbar h1 { font-size: 0.9rem; }
+      .card { padding: 12px; border-radius: 12px; }
+      .card-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+      .btn-sm { padding: 6px 10px; font-size: 0.78rem; }
+    }
+
     /* ══ DESKTOP: Sidebar wieder einblenden ══ */
     @media (min-width: 768px) {
       body {

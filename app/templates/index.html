@@ -211,7 +211,7 @@
           <td class="td-aktionen" style="white-space:nowrap;">
             <!-- Zur Einkaufsliste hinzufügen -->
             <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
-                    onclick="einkaufModal({{ p.name | tojson }}, {{ p.einheit | tojson }}, {{ p.gebinde_wert or 0 }})">🛒</button>
+                    onclick='einkaufModal({{ p.name | tojson }}, {{ p.einheit | tojson }}, {{ p.gebinde_wert or 0 }})'>🛒</button>
             <form method="post" action="{{ url_for('produkt_angebrochen', id=p.id) }}" style="display:inline;">
               <button type="submit" class="btn btn-sm"
                       style="background:{{ '#fed7aa' if p.ist_angebrochen else 'transparent' }};
@@ -224,7 +224,7 @@
             </form>
             <a href="{{ url_for('produkt_bearbeiten', id=p.id) }}" class="btn btn-ghost btn-sm">✏️</a>
             <form method="post" action="{{ url_for('produkt_loeschen', id=p.id) }}" style="display:inline"
-              onsubmit="return confirm({{ (p.name ~ ' wirklich löschen?') | tojson }})">
+              onsubmit='return confirm({{ (p.name ~ " wirklich löschen?") | tojson }})'>
               <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>
             </form>
           </td>

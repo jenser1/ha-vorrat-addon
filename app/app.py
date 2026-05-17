@@ -382,6 +382,12 @@ def index():
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     alle_listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
 
+    # Alle vorhandenen Lagerorte für Umlagern-Modal
+    alle_produkte_fuer_orte = Produkt.query.all()
+    lagerorte = sorted(set(
+        p.lagerort for p in alle_produkte_fuer_orte if p.lagerort
+    ))
+
     return render_template("index.html",
         produkte=produkte,
         abgelaufen=abgelaufen,
@@ -391,6 +397,7 @@ def index():
         kat_filter=kat_filter,
         einkauf_count=einkauf_count,
         alle_listen=alle_listen,
+        lagerorte=lagerorte,
         heute=heute
     )
 
@@ -482,6 +489,52 @@ def menge_anpassen(id):
     elif aktion == "verringern":
         p.menge = max(0, p.menge - wert)
     db.session.commit()
+    return redirect(url_for("index"))
+
+@app.route("/produkt/<int:id>/umlagern", methods=["POST"])
+def produkt_umlagern(id):
+    p = Produkt.query.get_or_404(id)
+    alter_ort = p.lagerort or "–"
+    neuer_ort = request.form.get("lagerort", "").strip()
+    try:
+        menge = float(request.form.get("menge", p.menge) or p.menge)
+    except ValueError:
+        menge = p.menge
+    menge = min(max(0, menge), p.menge)  # 0 … Gesamtmenge
+
+    if menge <= 0:
+        flash("Menge muss größer als 0 sein.", "danger")
+        return redirect(url_for("index"))
+
+    if menge >= p.menge:
+        # Vollständige Umlagerung – nur Lagerort ändern
+        p.lagerort = neuer_ort
+        db.session.commit()
+        flash(f"'{p.name}' ({int(menge) if menge == int(menge) else menge} {p.einheit}) komplett von '{alter_ort}' nach '{neuer_ort or '–'}' umgelagert.", "success")
+    else:
+        # Teilumlagerung – Menge abziehen, am Zielort hinzufügen
+        p.menge -= menge
+        vorhandener = Produkt.query.filter(
+            Produkt.name == p.name,
+            Produkt.lagerort == neuer_ort
+        ).first()
+        if vorhandener:
+            vorhandener.menge += menge
+        else:
+            neu = Produkt(
+                name=p.name,
+                menge=menge,
+                einheit=p.einheit,
+                mindestmenge=0,
+                lagerort=neuer_ort,
+                kategorie=p.kategorie,
+                mhd=p.mhd
+            )
+            db.session.add(neu)
+        db.session.commit()
+        menge_str = int(menge) if menge == int(menge) else menge
+        flash(f"'{p.name}': {menge_str} {p.einheit} von '{alter_ort}' nach '{neuer_ort or '–'}' umgelagert.", "success")
+
     return redirect(url_for("index"))
 
 # ── Routen: Einkaufsliste ──────────────────────────────────────────────────────

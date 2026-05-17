@@ -212,6 +212,9 @@
             <!-- Zur Einkaufsliste hinzufügen -->
             <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
                     onclick='einkaufModal({{ p.name | tojson }}, {{ p.einheit | tojson }}, {{ p.gebinde_wert or 0 }})'>🛒</button>
+            <!-- Umlagern -->
+            <button class="btn btn-ghost btn-sm" title="Umlagern"
+                    onclick='umlagerModal({{ p.id }}, {{ p.name | tojson }}, {{ (p.lagerort or "") | tojson }}, {{ p.menge }}, {{ p.einheit | tojson }})'>📍</button>
             <form method="post" action="{{ url_for('produkt_angebrochen', id=p.id) }}" style="display:inline;">
               <button type="submit" class="btn btn-sm"
                       style="background:{{ '#fed7aa' if p.ist_angebrochen else 'transparent' }};
@@ -295,6 +298,73 @@
   </div>
 </div>
 
+<!-- Umlagern Modal -->
+<div id="umlagern-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+  <div style="background:var(--card,white); border-radius:16px; padding:24px; width:90%; max-width:380px;">
+    <h3 style="margin-bottom:6px; font-size:1rem;">📍 Umlagern</h3>
+    <p id="u-info" style="font-size:0.82rem; color:var(--muted); margin-bottom:16px;"></p>
+    <form id="umlagern-form" method="post" action="">
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:0.82rem; font-weight:600;">Aktueller Lagerort</label>
+        <div id="u-von" style="padding:8px 10px; background:var(--bg,#f9fafb); border:1px solid var(--border); border-radius:8px; font-size:0.9rem; margin-top:4px; color:var(--muted);">–</div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:0.82rem; font-weight:600;">Menge umlagern</label>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+          <input type="number" name="menge" id="u-menge" min="0.1" step="0.1"
+                 style="width:100px; padding:10px; border:1px solid var(--border); border-radius:8px; font-size:1rem;">
+          <span id="u-einheit" style="font-size:0.9rem; color:var(--muted);"></span>
+          <span style="font-size:0.78rem; color:var(--muted);">(max: <span id="u-max"></span>)</span>
+        </div>
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-size:0.82rem; font-weight:600;">Neuer Lagerort</label>
+        <input type="text" name="lagerort" id="u-ziel" list="u-lagerorte-list"
+               placeholder="z.B. Küche, Kühlschrank, Keller …"
+               style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; font-size:1rem; margin-top:4px; box-sizing:border-box;">
+        <datalist id="u-lagerorte-list">
+          {%- set vordefiniert = ['Küche', 'Kühlschrank', 'Gefrierschrank', 'Keller', 'Vorratskammer', 'Garage', 'Bad', 'Tiefkühler'] -%}
+          {%- set alle_orte = (vordefiniert + lagerorte) | unique | sort -%}
+          {% for ort in alle_orte %}
+            <option value="{{ ort }}">
+          {% endfor %}
+        </datalist>
+      </div>
+
+      <!-- Schnellauswahl-Chips -->
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;">
+        {%- set schnell_orte = ['Küche', 'Kühlschrank', 'Gefrierschrank', 'Keller', 'Vorratskammer'] -%}
+        {% for ort in schnell_orte %}
+          <button type="button" class="btn btn-ghost btn-sm"
+                  onclick="document.getElementById('u-ziel').value='{{ ort }}'"
+                  style="font-size:0.78rem;">{{ ort }}</button>
+        {% endfor %}
+        {% for ort in lagerorte %}
+          {% if ort not in schnell_orte %}
+            <button type="button" class="btn btn-ghost btn-sm"
+                    onclick="document.getElementById('u-ziel').value='{{ ort }}'"
+                    style="font-size:0.78rem; border-color:#3b82f6; color:#3b82f6;">{{ ort }}</button>
+          {% endif %}
+        {% endfor %}
+      </div>
+
+      <div style="display:flex; gap:8px;">
+        <button type="submit"
+                style="flex:1; padding:12px; background:#3b82f6; color:white; border:none; border-radius:10px; font-size:1rem; font-weight:600; cursor:pointer;">
+          ✅ Umlagern
+        </button>
+        <button type="button" onclick="document.getElementById('umlagern-modal').style.display='none'"
+                style="padding:12px 16px; background:transparent; border:1px solid var(--border); border-radius:10px; font-size:1rem; cursor:pointer;">
+          ✕
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
 var _gebinde = 0;
 
@@ -347,6 +417,26 @@ function einkaufModal(name, einheit, gebinde) {
 }
 
 document.getElementById('einkauf-modal').addEventListener('click', function(e) {
+  if (e.target === this) this.style.display = 'none';
+});
+
+function umlagerModal(produktId, name, vonOrt, menge, einheit) {
+  var base = '{{ url_for("produkt_umlagern", id=0) }}';
+  document.getElementById('umlagern-form').action = base.replace('/0/', '/' + produktId + '/');
+  document.getElementById('u-info').textContent = name;
+  document.getElementById('u-von').textContent = vonOrt || '–';
+  document.getElementById('u-ziel').value = vonOrt || '';
+  // Menge
+  var mengeVal = Math.round(menge * 10) / 10;
+  document.getElementById('u-menge').value = mengeVal;
+  document.getElementById('u-menge').max = mengeVal;
+  document.getElementById('u-einheit').textContent = einheit;
+  document.getElementById('u-max').textContent = mengeVal + ' ' + einheit;
+  document.getElementById('umlagern-modal').style.display = 'flex';
+  setTimeout(function() { document.getElementById('u-menge').focus(); }, 100);
+}
+
+document.getElementById('umlagern-modal').addEventListener('click', function(e) {
   if (e.target === this) this.style.display = 'none';
 });
 </script>

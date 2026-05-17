@@ -101,6 +101,12 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
+### 1.5.3
+- 📱 Mobile Optimierung: Karten-Layout für Handy/Tablet (HA Companion App)
+- 📍 Umlagerung: Produkte zwischen Lagerorten verschieben (z.B. Keller → Küche)
+- 📍 Teilumlagerung: nur einen Teil der Menge umlagern
+- 🐛 Fix: Zur-Einkaufsliste-Button funktioniert wieder korrekt
+
 ### 1.5.2
 - 🐛 Doppelte Funktionsdefinitionen entfernt (get_settings, t, fmt_currency)
 - 🐛 Rezept-Einkauf: fehlende Menge wurde falsch berechnet

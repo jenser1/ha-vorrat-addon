@@ -35,7 +35,7 @@
   .td-name     { grid-area: name;     padding: 0 0 8px 0; border-bottom: none; display: flex; align-items: center; }
   .td-menge    { grid-area: menge;    padding: 8px 0;     border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); display: flex; justify-content: center; }
   .td-infos    { grid-area: infos;    padding: 8px 0 0 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; border-bottom: none; }
-  .td-aktionen { grid-area: aktionen; padding: 0 0 8px 0; display: flex; align-items: center; gap: 4px; justify-content: flex-end; border-bottom: none; }
+  .td-aktionen { grid-area: aktionen; padding: 0 0 8px 0; display: flex; align-items: center; gap: 4px; justify-content: flex-end; border-bottom: none; flex-wrap: wrap; }
 
   /* Info-Spalten in einer Zeile zusammenfassen */
   .td-lagerort { font-size: 0.78rem; color: var(--muted); }
@@ -46,6 +46,14 @@
   /* Stepper kompakter auf Mobile */
   .stepper button { width: 40px; height: 40px; font-size: 1.2rem; }
   .stepper .menge-wert { font-size: 1rem; min-width: 60px; }
+
+  /* Aktionen: kein nowrap auf Mobile */
+  .td-aktionen { white-space: normal; }
+}
+
+/* Desktop: Aktionen in einer Zeile halten */
+@media (min-width: 641px) {
+  .td-aktionen { white-space: nowrap; }
 }
 </style>
 
@@ -208,7 +216,7 @@
             {% endif %}
             <span class="kat-tag">{{ p.kategorie }}</span>
           </td>
-          <td class="td-aktionen" style="white-space:nowrap;">
+          <td class="td-aktionen">
             <!-- Zur Einkaufsliste hinzufügen -->
             <button class="btn btn-ghost btn-sm" title="Zur Einkaufsliste"
                     onclick='einkaufModal({{ p.name | tojson }}, {{ p.einheit | tojson }}, {{ p.gebinde_wert or 0 }})'>🛒</button>
@@ -339,13 +347,13 @@
         {%- set schnell_orte = ['Küche', 'Kühlschrank', 'Gefrierschrank', 'Keller', 'Vorratskammer'] -%}
         {% for ort in schnell_orte %}
           <button type="button" class="btn btn-ghost btn-sm"
-                  onclick="document.getElementById('u-ziel').value='{{ ort }}'"
+                  onclick='document.getElementById("u-ziel").value={{ ort | tojson }}'
                   style="font-size:0.78rem;">{{ ort }}</button>
         {% endfor %}
         {% for ort in lagerorte %}
           {% if ort not in schnell_orte %}
             <button type="button" class="btn btn-ghost btn-sm"
-                    onclick="document.getElementById('u-ziel').value='{{ ort }}'"
+                    onclick='document.getElementById("u-ziel").value={{ ort | tojson }}'
                     style="font-size:0.78rem; border-color:#3b82f6; color:#3b82f6;">{{ ort }}</button>
           {% endif %}
         {% endfor %}

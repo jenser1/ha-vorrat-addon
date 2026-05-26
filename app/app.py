@@ -1340,7 +1340,7 @@ def ha_sensoren_aktualisieren():
 
     def sensor_setzen(entity_id, state, attributes=None):
         try:
-            requests.post(
+            resp = requests.post(
                 f"{HA_URL}/states/{entity_id}",
                 headers={
                     "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
@@ -1349,6 +1349,9 @@ def ha_sensoren_aktualisieren():
                 json={"state": str(state), "attributes": attributes or {}},
                 timeout=5
             )
+            resp.raise_for_status()  # Wirft Exception bei HTTP 4xx/5xx
+        except requests.HTTPError as e:
+            print(f"HA Sensor HTTP-Fehler ({entity_id}): {e.response.status_code} {e.response.text[:200]}", flush=True)
         except Exception as e:
             print(f"HA Sensor Fehler ({entity_id}): {e}", flush=True)
 
@@ -1372,10 +1375,14 @@ def ha_sensoren_aktualisieren():
                     # Unter Mindestmenge
                     unter_min = [p for p in alle if p.menge < p.mindestmenge]
 
+                    # Einkaufsliste (offene Artikel)
+                    einkauf_offen = Einkaufsliste.query.filter_by(erledigt=False).count()
+
                     # Sensor: Abgelaufen
                     sensor_setzen("sensor.vorrat_abgelaufen", len(abgelaufen), {
                         "friendly_name": "Vorrat: Abgelaufen",
                         "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
                         "icon": "mdi:food-off",
                         "produkte": [{"name": p.name, "mhd": str(p.mhd)} for p in abgelaufen[:10]]
                     })
@@ -1384,6 +1391,7 @@ def ha_sensoren_aktualisieren():
                     sensor_setzen("sensor.vorrat_bald_ablaufend", len(bald), {
                         "friendly_name": "Vorrat: Bald ablaufend",
                         "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
                         "icon": "mdi:food-clock",
                         "produkte": [{"name": p.name, "mhd": str(p.mhd), "tage": (p.mhd - heute).days} for p in bald[:10]]
                     })
@@ -1392,6 +1400,7 @@ def ha_sensoren_aktualisieren():
                     sensor_setzen("sensor.vorrat_kritisch", len(kritisch), {
                         "friendly_name": "Vorrat: Kritisch (≤3 Tage)",
                         "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
                         "icon": "mdi:food-alert",
                         "produkte": [{"name": p.name, "mhd": str(p.mhd), "tage": (p.mhd - heute).days} for p in kritisch[:10]]
                     })
@@ -1400,6 +1409,7 @@ def ha_sensoren_aktualisieren():
                     sensor_setzen("sensor.vorrat_unter_mindestmenge", len(unter_min), {
                         "friendly_name": "Vorrat: Unter Mindestmenge",
                         "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
                         "icon": "mdi:package-down",
                         "produkte": [{"name": p.name, "menge": p.menge, "mindestmenge": p.mindestmenge, "einheit": p.einheit} for p in unter_min[:10]]
                     })
@@ -1408,10 +1418,19 @@ def ha_sensoren_aktualisieren():
                     sensor_setzen("sensor.vorrat_gesamt", len(alle), {
                         "friendly_name": "Vorrat: Gesamt",
                         "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
                         "icon": "mdi:food-apple",
                     })
 
-                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min.", flush=True)
+                    # Sensor: Einkaufsliste (offene Artikel)
+                    sensor_setzen("sensor.vorrat_einkaufsliste", einkauf_offen, {
+                        "friendly_name": "Vorrat: Einkaufsliste offen",
+                        "unit_of_measurement": "Artikel",
+                        "state_class": "measurement",
+                        "icon": "mdi:cart",
+                    })
+
+                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min., {einkauf_offen} Einkauf offen.", flush=True)
 
             except Exception as e:
                 print(f"HA Update Fehler: {e}", flush=True)

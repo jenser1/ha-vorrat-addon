@@ -38,6 +38,7 @@ Automatisch verfügbare HA-Sensoren:
 | `sensor.vorrat_kritisch` | Ablaufend in ≤3 Tagen |
 | `sensor.vorrat_unter_mindestmenge` | Unter Mindestmenge |
 | `sensor.vorrat_gesamt` | Gesamtanzahl Produkte |
+| `sensor.vorrat_einkaufsliste` | Offene Artikel in Einkaufslisten |
 
 ### 🌍 Mehrsprachig & Mehrere Währungen
 - Sprachen: Deutsch, Englisch, Französisch, Spanisch

@@ -102,6 +102,13 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
+### 1.5.4
+- 🔍 Lagerort-Filter in der Übersicht (kombinierbar mit Kategorie-Filter)
+- 🔒 Filter bleibt erhalten bei: +/- Menge, Bearbeiten, Löschen, Angebrochen, Umlagern
+- 📍 Umlagerung: Mengenfeld ergänzt (Teilumlagerung möglich)
+- 🐛 Fix: Chip-onclick im Umlagern-Modal (Apostroph-Sicherheit)
+- 🐛 Fix: Mobile Aktionen-Buttons umbrechen statt zu überlaufen
+
 ### 1.5.3
 - 📱 Mobile Optimierung: Karten-Layout für Handy/Tablet (HA Companion App)
 - 📍 Umlagerung: Produkte zwischen Lagerorten verschieben (z.B. Keller → Küche)

@@ -99,20 +99,43 @@
 </div>
 {% endif %}
 
-<!-- Kategorie-Filter -->
+<!-- Filter -->
 <div class="card">
-  <div class="card-header">
+  <div class="card-header" style="flex-direction:column; align-items:flex-start; gap:10px;">
     <span class="card-title">
-      {% if kat_filter %}{{ kat_filter }}{% else %}Alle Produkte{% endif %}
+      {% if kat_filter and ort_filter %}{{ kat_filter }} · 📍 {{ ort_filter }}
+      {% elif kat_filter %}{{ kat_filter }}
+      {% elif ort_filter %}📍 {{ ort_filter }}
+      {% else %}Alle Produkte{% endif %}
     </span>
-    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-      <a href="{{ url_for('index') }}" class="btn btn-ghost btn-sm {% if not kat_filter %}btn-primary{% endif %}">Alle</a>
+
+    <!-- Kategorie-Chips -->
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+      <span style="font-size:0.72rem; color:var(--muted); font-weight:600; white-space:nowrap;">Kategorie:</span>
+      <a href="{{ url_for('index', lagerort=ort_filter) }}"
+         class="btn btn-ghost btn-sm {% if not kat_filter %}btn-primary{% endif %}">Alle</a>
       {% for kat in kategorien %}
-        <a href="{{ url_for('index', kategorie=kat) }}" class="btn btn-sm {% if kat_filter == kat %}btn-primary{% else %}btn-ghost{% endif %}">
+        <a href="{{ url_for('index', kategorie=kat, lagerort=ort_filter) }}"
+           class="btn btn-sm {% if kat_filter == kat %}btn-primary{% else %}btn-ghost{% endif %}">
           {{ kat }}
         </a>
       {% endfor %}
     </div>
+
+    <!-- Lagerort-Chips (nur wenn Lagerorte vorhanden) -->
+    {% if lagerorte %}
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+      <span style="font-size:0.72rem; color:var(--muted); font-weight:600; white-space:nowrap;">📍 Lagerort:</span>
+      <a href="{{ url_for('index', kategorie=kat_filter) }}"
+         class="btn btn-ghost btn-sm {% if not ort_filter %}btn-primary{% endif %}">Alle</a>
+      {% for ort in lagerorte %}
+        <a href="{{ url_for('index', kategorie=kat_filter, lagerort=ort) }}"
+           class="btn btn-sm {% if ort_filter == ort %}btn-primary{% else %}btn-ghost{% endif %}">
+          {{ ort }}
+        </a>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 
   {% if produkte %}
@@ -150,7 +173,7 @@
             <div style="display:flex; flex-direction:column; gap:4px;">
               <!-- Kisten-Stepper -->
               <div class="stepper" style="justify-content:center;">
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                   <input type="hidden" name="aktion" value="verringern">
                   <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
                   <button type="submit" title="{{ p.gebinde_wert }} {{ p.einheit }} entfernen"
@@ -161,7 +184,7 @@
                 <span style="font-size:0.72rem; color:var(--muted); min-width:55px; text-align:center;">
                   📦 à {{ p.gebinde_wert }}
                 </span>
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                   <input type="hidden" name="aktion" value="erhoehen">
                   <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
                   <button type="submit" title="{{ p.gebinde_wert }} {{ p.einheit }} hinzufügen"
@@ -172,7 +195,7 @@
               </div>
               <!-- Einzel-Stepper -->
               <div class="stepper" style="justify-content:center;">
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                   <input type="hidden" name="aktion" value="verringern">
                   <input type="hidden" name="wert" value="1">
                   <button type="submit" title="1 {{ p.einheit }} entfernen">−</button>
@@ -183,7 +206,7 @@
                     = {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten
                   </span>
                 </span>
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                   <input type="hidden" name="aktion" value="erhoehen">
                   <input type="hidden" name="wert" value="1">
                   <button type="submit" title="1 {{ p.einheit }} hinzufügen">+</button>
@@ -193,7 +216,7 @@
             {% else %}
             <!-- Normaler Stepper -->
             <div class="stepper">
-              <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                 <input type="hidden" name="aktion" value="verringern">
                 <input type="hidden" name="wert" value="1">
                 <button type="submit">−</button>
@@ -201,7 +224,7 @@
               <span class="menge-wert" style="color: {{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
                 {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
               </span>
-              <form method="post" action="{{ url_for('menge_anpassen', id=p.id) }}" style="display:inline">
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                 <input type="hidden" name="aktion" value="erhoehen">
                 <input type="hidden" name="wert" value="1">
                 <button type="submit">+</button>
@@ -222,8 +245,8 @@
                     onclick='einkaufModal({{ p.name | tojson }}, {{ p.einheit | tojson }}, {{ p.gebinde_wert or 0 }})'>🛒</button>
             <!-- Umlagern -->
             <button class="btn btn-ghost btn-sm" title="Umlagern"
-                    onclick='umlagerModal({{ p.id }}, {{ p.name | tojson }}, {{ (p.lagerort or "") | tojson }}, {{ p.menge }}, {{ p.einheit | tojson }})'>📍</button>
-            <form method="post" action="{{ url_for('produkt_angebrochen', id=p.id) }}" style="display:inline;">
+                    onclick='umlagerModal({{ p.id }}, {{ p.name | tojson }}, {{ (p.lagerort or "") | tojson }}, {{ p.menge }}, {{ p.einheit | tojson }}, {{ kat_filter | tojson }}, {{ ort_filter | tojson }})'>📍</button>
+            <form method="post" action="{{ url_for('produkt_angebrochen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline;">
               <button type="submit" class="btn btn-sm"
                       style="background:{{ '#fed7aa' if p.ist_angebrochen else 'transparent' }};
                              border:2px solid {{ '#fb923c' if p.ist_angebrochen else 'var(--border)' }};
@@ -233,8 +256,8 @@
                 A
               </button>
             </form>
-            <a href="{{ url_for('produkt_bearbeiten', id=p.id) }}" class="btn btn-ghost btn-sm">✏️</a>
-            <form method="post" action="{{ url_for('produkt_loeschen', id=p.id) }}" style="display:inline"
+            <a href="{{ url_for('produkt_bearbeiten', id=p.id, zurueck_kat=kat_filter or none, zurueck_ort=ort_filter or none) }}" class="btn btn-ghost btn-sm">✏️</a>
+            <form method="post" action="{{ url_for('produkt_loeschen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline"
               onsubmit='return confirm({{ (p.name ~ " wirklich löschen?") | tojson }})'>
               <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>
             </form>
@@ -428,9 +451,12 @@ document.getElementById('einkauf-modal').addEventListener('click', function(e) {
   if (e.target === this) this.style.display = 'none';
 });
 
-function umlagerModal(produktId, name, vonOrt, menge, einheit) {
+function umlagerModal(produktId, name, vonOrt, menge, einheit, kat, ort) {
   var base = '{{ url_for("produkt_umlagern", id=0) }}';
-  document.getElementById('umlagern-form').action = base.replace('/0/', '/' + produktId + '/');
+  var action = base.replace('/0/', '/' + produktId + '/');
+  if (kat) action += (action.indexOf('?') >= 0 ? '&' : '?') + 'kategorie=' + encodeURIComponent(kat);
+  if (ort) action += (action.indexOf('?') >= 0 ? '&' : '?') + 'lagerort=' + encodeURIComponent(ort);
+  document.getElementById('umlagern-form').action = action;
   document.getElementById('u-info').textContent = name;
   document.getElementById('u-von').textContent = vonOrt || '–';
   document.getElementById('u-ziel').value = vonOrt || '';

@@ -356,13 +356,18 @@ def index():
     bald_ablaufend = [p for p in produkte if p.mhd and heute <= p.mhd <= in_7_tagen]
     unter_mindest = [p for p in produkte if p.menge < p.mindestmenge]
     
-    # Kategorien für Sidebar
+    # Kategorien und Lagerorte aus allen Produkten (vor Filter)
     kategorien = sorted(set(p.kategorie for p in produkte))
-    
+    lagerorte = sorted(set(p.lagerort for p in produkte if p.lagerort))
+
     kat_filter = request.args.get("kategorie", "")
+    ort_filter = request.args.get("lagerort", "")
+
     if kat_filter:
         produkte = [p for p in produkte if p.kategorie == kat_filter]
-    
+    if ort_filter:
+        produkte = [p for p in produkte if p.lagerort == ort_filter]
+
     # angebrochen und gebinde direkt per SQL laden
     try:
         _conn = sqlite3.connect(DB_PATH)
@@ -378,15 +383,9 @@ def index():
         p.mhd_status = mhd_status(p.mhd)
         p.ist_angebrochen = p.id in _angebrochen_ids
         p.gebinde_wert = _gebinde_map.get(p.id, 0)
-    
+
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     alle_listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
-
-    # Alle vorhandenen Lagerorte für Umlagern-Modal
-    alle_produkte_fuer_orte = Produkt.query.all()
-    lagerorte = sorted(set(
-        p.lagerort for p in alle_produkte_fuer_orte if p.lagerort
-    ))
 
     return render_template("index.html",
         produkte=produkte,
@@ -394,10 +393,11 @@ def index():
         bald_ablaufend=bald_ablaufend,
         unter_mindest=unter_mindest,
         kategorien=kategorien,
+        lagerorte=lagerorte,
         kat_filter=kat_filter,
+        ort_filter=ort_filter,
         einkauf_count=einkauf_count,
         alle_listen=alle_listen,
-        lagerorte=lagerorte,
         heute=heute
     )
 
@@ -444,13 +444,17 @@ def produkt_bearbeiten(id):
         db.session.commit()
         # Gebinde direkt per SQL speichern
         gebinde_val = int(request.form.get("gebinde", 0) or 0)
-        print(f"DEBUG: Speichere gebinde={gebinde_val} für id={id}", flush=True)
         with db.engine.connect() as conn:
             conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": id})
             conn.commit()
-        print(f"DEBUG: Gespeichert!", flush=True)
         flash(f"'{p.name}' wurde gespeichert.", "success")
-        return redirect(url_for("index"))
+        # Zurück zum gleichen Filter
+        zurueck_kat = request.form.get("zurueck_kat", "") or None
+        zurueck_ort = request.form.get("zurueck_ort", "") or None
+        return redirect(url_for("index", kategorie=zurueck_kat, lagerort=zurueck_ort))
+    # GET – Filter für Rücksprung merken
+    zurueck_kat = request.args.get("zurueck_kat", "")
+    zurueck_ort = request.args.get("zurueck_ort", "")
     # Gebinde-Wert direkt per SQL laden
     try:
         with db.engine.connect() as conn:
@@ -458,7 +462,8 @@ def produkt_bearbeiten(id):
             p.gebinde_wert = int(row[0] or 0) if row else 0
     except:
         p.gebinde_wert = 0
-    return render_template("produkt_form.html", produkt=p)
+    return render_template("produkt_form.html", produkt=p,
+                           zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort)
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
@@ -468,7 +473,9 @@ def produkt_angebrochen(id):
             neu = 0 if row[0] else 1
             conn.execute(db.text("UPDATE produkt SET angebrochen=:val WHERE id=:id"), {"val": neu, "id": id})
             conn.commit()
-    return redirect(url_for("index"))
+    kat = request.args.get("kategorie") or None
+    ort = request.args.get("lagerort") or None
+    return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
 @app.route("/produkt/<int:id>/loeschen", methods=["POST"])
 def produkt_loeschen(id):
@@ -477,7 +484,9 @@ def produkt_loeschen(id):
     db.session.delete(p)
     db.session.commit()
     flash(f"'{name}' wurde gelöscht.", "info")
-    return redirect(url_for("index"))
+    kat = request.args.get("kategorie") or None
+    ort = request.args.get("lagerort") or None
+    return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
 @app.route("/produkt/<int:id>/menge", methods=["POST"])
 def menge_anpassen(id):
@@ -489,7 +498,9 @@ def menge_anpassen(id):
     elif aktion == "verringern":
         p.menge = max(0, p.menge - wert)
     db.session.commit()
-    return redirect(url_for("index"))
+    kat = request.args.get("kategorie") or None
+    ort = request.args.get("lagerort") or None
+    return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
 @app.route("/produkt/<int:id>/umlagern", methods=["POST"])
 def produkt_umlagern(id):
@@ -535,7 +546,9 @@ def produkt_umlagern(id):
         menge_str = int(menge) if menge == int(menge) else menge
         flash(f"'{p.name}': {menge_str} {p.einheit} von '{alter_ort}' nach '{neuer_ort or '–'}' umgelagert.", "success")
 
-    return redirect(url_for("index"))
+    kat = request.args.get("kategorie") or None
+    ort = request.args.get("lagerort") or None
+    return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
 # ── Routen: Einkaufsliste ──────────────────────────────────────────────────────
 

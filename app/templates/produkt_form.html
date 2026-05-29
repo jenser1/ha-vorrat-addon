@@ -9,6 +9,8 @@
   </div>
 
   <form method="post">
+    <input type="hidden" name="zurueck_kat" value="{{ zurueck_kat or '' }}">
+    <input type="hidden" name="zurueck_ort" value="{{ zurueck_ort or '' }}">
     <div class="form-grid">
       <div class="form-group" style="grid-column: 1 / -1;">
         <label>Produktname *</label>
@@ -81,7 +83,7 @@
       <button type="submit" class="btn btn-primary">
         {{ '💾 Speichern' if produkt else '✅ Hinzufügen' }}
       </button>
-      <a href="{{ url_for('index') }}" class="btn btn-ghost">Abbrechen</a>
+      <a href="{{ url_for('index', kategorie=zurueck_kat or none, lagerort=zurueck_ort or none) }}" class="btn btn-ghost">Abbrechen</a>
     </div>
   </form>
 </div>

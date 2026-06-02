@@ -102,6 +102,13 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
+### 1.5.5
+- 🌐 Web-Import: Kaufland Zutaten im Pipe-Format (`300 g | grüner Spargel`) werden korrekt erkannt
+- 🌐 Web-Import: Kaufland Zubereitung wird jetzt zuverlässig geladen
+- 🌐 Web-Import: Lidl-Kochen.de erkennt JavaScript-gerenderte Seiten und zeigt klare Benutzerwarnung
+- 🌐 Web-Import: Schema.org Parser unterstützt `HowToSection`, verschachtelte Anleitungen und `@graph`-Format
+- 🐛 Fix: `fallback_extrahieren()` wird jetzt korrekt aufgerufen wenn Schema.org leer zurückgibt
+
 ### 1.5.4
 - 🔍 Lagerort-Filter in der Übersicht (kombinierbar mit Kategorie-Filter)
 - 🔒 Filter bleibt erhalten bei: +/- Menge, Bearbeiten, Löschen, Angebrochen, Umlagern

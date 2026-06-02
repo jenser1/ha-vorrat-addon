@@ -917,9 +917,12 @@ def rezept_pdf_import():
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 def html_bereinigen(text):
@@ -953,6 +956,28 @@ def zutat_parsen(text):
                  "Dose", "Packung", "Pkg", "Tasse", "Becher", "Scheibe",
                  "Scheiben", "Zehe", "Zehen", "cm", "tbsp", "tsp", "cup",
                  "oz", "lb", "handful", "bunch"]
+
+    # Kaufland-Format: "300 g | grüner Spargel" oder "4 | TK-Lachsfilets"
+    if "|" in text:
+        teile = [t.strip() for t in text.split("|", 1)]
+        menge_teil = teile[0].strip()
+        name_teil  = teile[1].strip() if len(teile) > 1 else ""
+        if name_teil:
+            # Menge + Einheit im linken Teil parsen
+            m = re.match(
+                r"^([\d\s\/½¼¾⅓⅔,\.]+)\s*("
+                + "|".join(re.escape(e) for e in einheiten)
+                + r")\.?\s*$", menge_teil, re.I)
+            if m:
+                return menge_parsen(m.group(1)), m.group(2), name_teil
+            # Nur Zahl links
+            m2 = re.match(r"^([\d½¼¾⅓⅔][,\.\d\s\/]*)\s*$", menge_teil)
+            if m2:
+                return menge_parsen(m2.group(1)), "Stück", name_teil
+            # Linker Teil ist kein Zahlenwert → ganzer Text als Name
+            if not re.search(r"\d", menge_teil):
+                return 1.0, "Stück", f"{menge_teil} {name_teil}".strip()
+
     m = re.match(
         r"^([\d\s\/½¼¾⅓⅔,\.]+)\s*("
         + "|".join(re.escape(e) for e in einheiten)
@@ -970,51 +995,83 @@ def schema_org_extrahieren(soup):
     for tag in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(tag.string or "")
-            # Manchmal ist es ein Array oder in @graph
+
+            # Alle Kandidaten sammeln: Array, @graph oder einzelnes Objekt
+            kandidaten = []
             if isinstance(data, list):
-                for d in data:
-                    if d.get("@type") == "Recipe":
-                        data = d
-                        break
-            if isinstance(data, dict) and "@graph" in data:
-                for d in data["@graph"]:
-                    if isinstance(d, dict) and d.get("@type") == "Recipe":
-                        data = d
-                        break
-            if not isinstance(data, dict) or data.get("@type") != "Recipe":
+                kandidaten = data
+            elif isinstance(data, dict):
+                kandidaten = data.get("@graph", [data])
+
+            # Rezept-Objekt finden (@type kann String ODER Liste sein)
+            rezept = None
+            for d in kandidaten:
+                if not isinstance(d, dict):
+                    continue
+                typ = d.get("@type", "")
+                typen = typ if isinstance(typ, list) else [typ]
+                if "Recipe" in typen:
+                    rezept = d
+                    break
+            if not rezept:
                 continue
 
             # Zutaten extrahieren
-            zutaten_roh = data.get("recipeIngredient", [])
+            zutaten_roh = rezept.get("recipeIngredient", [])
             zutaten = []
             for z in zutaten_roh:
                 menge, einheit, name = zutat_parsen(str(z))
                 zutaten.append({"name": name, "menge": menge, "einheit": einheit})
 
-            # Anleitung extrahieren
-            anleitung_roh = data.get("recipeInstructions", [])
+            # Anleitung – auch HowToSection und HowToStep behandeln
+            anleitung_roh = rezept.get("recipeInstructions", [])
             anleitung_zeilen = []
+
+            def schritt_texte(schritt):
+                """Gibt Textzeilen aus einem HowToStep/HowToSection/String zurück."""
+                if isinstance(schritt, str):
+                    t = html_bereinigen(schritt)
+                    return [t] if t else []
+                if isinstance(schritt, dict):
+                    if schritt.get("@type") == "HowToSection":
+                        result = []
+                        if schritt.get("name"):
+                            result.append(f"── {schritt['name']} ──")
+                        for sub in schritt.get("itemListElement", []):
+                            result.extend(schritt_texte(sub))
+                        return result
+                    t = html_bereinigen(schritt.get("text") or schritt.get("name") or "")
+                    return [t] if t else []
+                return []
+
             if isinstance(anleitung_roh, str):
                 anleitung_zeilen = [html_bereinigen(anleitung_roh)]
             elif isinstance(anleitung_roh, list):
-                for i, schritt in enumerate(anleitung_roh, 1):
-                    if isinstance(schritt, dict):
-                        text = html_bereinigen(schritt.get("text", ""))
-                    else:
-                        text = html_bereinigen(str(schritt))
-                    if text:
-                        anleitung_zeilen.append(f"{i}. {text}")
+                nr = 1
+                for schritt in anleitung_roh:
+                    for zeile in schritt_texte(schritt):
+                        if zeile.startswith("──"):
+                            anleitung_zeilen.append(zeile)
+                        else:
+                            anleitung_zeilen.append(f"{nr}. {zeile}")
+                            nr += 1
 
             # Portionen
             portionen = 4
-            port_str = str(data.get("recipeYield", "4"))
+            port_val = rezept.get("recipeYield", "4")
+            port_str = str(port_val[0] if isinstance(port_val, list) else port_val)
             m = re.search(r"\d+", port_str)
             if m:
                 portionen = int(m.group())
 
-            beschreibung = html_bereinigen(str(data.get("description", "")))[:200]
+            # Titel bereinigen (z.B. "Spaghetti – Rezept | Chefkoch" → "Spaghetti")
+            titel = html_bereinigen(str(rezept.get("name", "")))
+            titel = re.sub(r"\s*[-–|]\s*(Rezept|Recipe).*$", "", titel, flags=re.I).strip()
+
+            beschreibung = html_bereinigen(str(rezept.get("description", "")))[:300]
+
             return {
-                "titel": html_bereinigen(str(data.get("name", ""))),
+                "titel": titel,
                 "beschreibung": beschreibung,
                 "portionen": portionen,
                 "zutaten": zutaten,
@@ -1030,216 +1087,340 @@ def fallback_extrahieren(soup, url):
     ergebnis = {"titel": "", "beschreibung": "", "portionen": 4,
                 "zutaten": [], "anleitung": "", "quelle": "fallback"}
 
-    # Titel
-    for sel in ["h1", "h2", ".recipe-title", ".recipe-name", "#recipe-title"]:
-        el = soup.select_one(sel)
-        if el:
-            ergebnis["titel"] = el.get_text(strip=True)
-            break
+    # Titel – og:title als erste Wahl
+    og_title = soup.find("meta", attrs={"property": "og:title"})
+    if og_title and og_title.get("content"):
+        ergebnis["titel"] = og_title["content"].strip()
+        ergebnis["titel"] = re.sub(r"\s*[-–|]\s*(Rezept|Recipe).*$", "", ergebnis["titel"], flags=re.I).strip()
+    if not ergebnis["titel"]:
+        for sel in ["h1.recipe-title", "h1.o-headline", "h1[class*=recipe]",
+                    "h1[class*=title]", "h1", "h2"]:
+            el = soup.select_one(sel)
+            if el:
+                ergebnis["titel"] = el.get_text(strip=True)
+                break
 
-    # Zutaten: typische Klassen/IDs
+    # Zutaten: erweiterte Selektoren
     zutaten_container = None
-    for sel in [".ingredients", ".recipe-ingredients", "#ingredients",
-                "[class*=ingredient]", "[itemprop=ingredients]"]:
+    for sel in [
+        "[class*=ingredient-list]", "[class*=ingredients-list]",
+        "[class*=IngredientList]", "[class*=ingredientList]",
+        ".ingredients", ".recipe-ingredients", "#ingredients",
+        "[class*=ingredient]", "[itemprop=recipeIngredient]",
+        "[class*=zutat]", "[class*=Zutat]",
+    ]:
         zutaten_container = soup.select_one(sel)
         if zutaten_container:
             break
 
     if zutaten_container:
-        for li in zutaten_container.find_all(["li", "p"]):
+        for li in zutaten_container.find_all(["li", "p", "span", "div"]):
+            # Nur direkte Kinder-Texte, keine Duplikate durch Verschachtelung
+            if li.find(["li", "ul"]):
+                continue
             text = li.get_text(strip=True)
-            if text and len(text) > 2:
+            if text and 2 < len(text) < 150:
                 menge, einheit, name = zutat_parsen(text)
                 ergebnis["zutaten"].append({"name": name, "menge": menge, "einheit": einheit})
 
-    # Anleitung
+    # Anleitung: erweiterte Selektoren
     anleitung_container = None
-    for sel in [".instructions", ".recipe-instructions", "#instructions",
-                ".preparation", "[class*=instruction]", "[class*=direction]",
-                "[itemprop=recipeInstructions]"]:
+    for sel in [
+        "[class*=preparation-steps]", "[class*=recipe-steps]",
+        "[class*=InstructionList]", "[class*=instructionList]",
+        "[class*=step-list]", "[class*=stepList]",
+        ".instructions", ".recipe-instructions", "#instructions",
+        ".preparation", "[class*=instruction]", "[class*=direction]",
+        "[itemprop=recipeInstructions]", "[class*=zubereitung]",
+    ]:
         anleitung_container = soup.select_one(sel)
         if anleitung_container:
             break
 
     if anleitung_container:
         schritte = []
-        for i, li in enumerate(anleitung_container.find_all(["li", "p", "step"]), 1):
+        for li in anleitung_container.find_all(["li", "p"]):
             text = li.get_text(strip=True)
-            if text and len(text) > 10:
-                schritte.append(f"{i}. {text}")
-        ergebnis["anleitung"] = "\n".join(schritte)
+            if text and len(text) > 15:
+                schritte.append(text)
+        if schritte:
+            ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
 
     return ergebnis
 
 def kaufland_extrahieren(soup):
-    """Spezifischer Parser für filiale.kaufland.de."""
-    ergebnis = {"titel": "", "beschreibung": "", "portionen": 4,
-                "zutaten": [], "anleitung": "", "quelle": "kaufland"}
+    """Parser für filiale.kaufland.de – Schema.org zuerst, dann HTML-Fallback."""
+
+    # 1. Schema.org versuchen (Kaufland hat oft valides JSON-LD)
+    schema = schema_org_extrahieren(soup)
+    if schema and schema.get("titel") and (schema.get("zutaten") or schema.get("anleitung")):
+        schema["quelle"] = "kaufland+schema"
+        return schema
+
+    ergebnis = schema or {"titel": "", "beschreibung": "", "portionen": 4,
+                          "zutaten": [], "anleitung": "", "quelle": "kaufland"}
+    ergebnis["quelle"] = "kaufland"
 
     # Titel
-    for sel in ["h1", ".recipe-hero__title", "[class*=recipe-title]", "[class*=recipe-name]"]:
-        el = soup.select_one(sel)
-        if el:
-            ergebnis["titel"] = el.get_text(strip=True)
-            break
-
-    # Beschreibung: Meta-Tag, Intro-Text oder Teaser
-    meta_desc = soup.find("meta", attrs={"name": "description"}) or                 soup.find("meta", attrs={"property": "og:description"})
-    if meta_desc:
-        ergebnis["beschreibung"] = meta_desc.get("content", "")[:200].strip()
-
-    if not ergebnis["beschreibung"]:
-        for sel in ["[class*=recipe-intro]", "[class*=recipe-description]",
-                    "[class*=recipe-teaser]", "[class*=recipe-subtitle]",
-                    ".recipe-hero__description", "[class*=recipe-lead]"]:
+    if not ergebnis.get("titel"):
+        for sel in ["h1", ".recipe-hero__title", "[class*=recipe-title]", "[class*=recipe-name]"]:
             el = soup.select_one(sel)
             if el:
-                ergebnis["beschreibung"] = el.get_text(strip=True)[:200]
+                ergebnis["titel"] = el.get_text(strip=True)
+                break
+
+    # Beschreibung
+    if not ergebnis.get("beschreibung"):
+        for attr in [{"name": "description"}, {"property": "og:description"}]:
+            meta = soup.find("meta", attrs=attr)
+            if meta and meta.get("content"):
+                ergebnis["beschreibung"] = meta["content"][:300].strip()
                 break
 
     # Portionen
-    for el in soup.select("[class*=portion], [class*=serving], [class*=yield], [class*=personen]"):
-        m = re.search(r"(\d+)", el.get_text())
-        if m:
-            ergebnis["portionen"] = int(m.group(1))
-            break
-    if ergebnis["portionen"] == 4:
-        port_text = soup.find(string=re.compile(r"\d+\s*(Portion|Person|Serving)", re.I))
-        if port_text:
-            m = re.search(r"(\d+)", str(port_text))
+    if ergebnis.get("portionen", 4) == 4:
+        for el in soup.select("[class*=portion], [class*=serving], [class*=yield], [class*=personen]"):
+            m = re.search(r"(\d+)", el.get_text())
             if m:
                 ergebnis["portionen"] = int(m.group(1))
+                break
 
-    # Zutaten: Tabelle mit Menge + Name (typisch Kaufland)
-    for row in soup.select("tr"):
-        cells = row.find_all(["td", "th"])
-        if len(cells) >= 2:
-            menge_text = cells[0].get_text(strip=True)
-            name_text = cells[1].get_text(strip=True)
-            if name_text and len(name_text) > 1 and not re.match(r"^(Menge|Zutat|Ingredient)", name_text, re.I):
-                menge, einheit, name = zutat_parsen(f"{menge_text} {name_text}")
-                ergebnis["zutaten"].append({"name": name, "menge": menge, "einheit": einheit})
+    # Zutaten (wenn Schema.org keine hatte)
+    if not ergebnis.get("zutaten"):
+        # Tabelle Menge | Zutat
+        for row in soup.select("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) >= 2:
+                menge_text = cells[0].get_text(strip=True)
+                name_text  = cells[1].get_text(strip=True)
+                if name_text and len(name_text) > 1 and not re.match(r"^(Menge|Zutat|Ingredient)", name_text, re.I):
+                    menge, einheit, name = zutat_parsen(f"{menge_text} {name_text}")
+                    ergebnis["zutaten"].append({"name": name, "menge": menge, "einheit": einheit})
 
-    # Zutaten: spezifische Kaufland-Klassen
-    if not ergebnis["zutaten"]:
+    if not ergebnis.get("zutaten"):
         for sel in ["[class*=ingredient]", "[class*=zutat]", "[class*=recipe-ingredient]"]:
             items = soup.select(f"{sel} li, {sel}")
             for li in items:
+                if li.find(["li", "ul"]):
+                    continue
                 text = li.get_text(strip=True)
-                if text and len(text) > 1 and len(text) < 100:
+                if text and 2 < len(text) < 120:
                     menge, einheit, name = zutat_parsen(text)
                     ergebnis["zutaten"].append({"name": name, "menge": menge, "einheit": einheit})
-            if ergebnis["zutaten"]:
+            if ergebnis.get("zutaten"):
                 break
 
-    # Zutaten: generische Liste als Fallback
-    if not ergebnis["zutaten"]:
+    # Zutaten: Pipe-Format "300 g | grüner Spargel" (typisch Kaufland)
+    if not ergebnis.get("zutaten"):
+        zutaten_pipe = []
+        for el in soup.find_all(string=re.compile(r"\|")):
+            zeile = el.strip()
+            if "|" in zeile and 2 < len(zeile) < 150:
+                menge, einheit, name = zutat_parsen(zeile)
+                if name and name not in [z["name"] for z in zutaten_pipe]:
+                    zutaten_pipe.append({"name": name, "menge": menge, "einheit": einheit})
+        if zutaten_pipe:
+            ergebnis["zutaten"] = zutaten_pipe
+
+    # Zutaten: generische ul li als letzter Fallback
+    if not ergebnis.get("zutaten"):
         for li in soup.select("ul li"):
             text = li.get_text(strip=True)
             if text and re.match(r"^[\d½¼¾]|^\d+\s*(g|kg|ml|l|EL|TL|Bund|Stück)", text, re.I):
                 menge, einheit, name = zutat_parsen(text)
                 ergebnis["zutaten"].append({"name": name, "menge": menge, "einheit": einheit})
 
-    # Anleitung: nummerierte Schritte
-    schritte = []
-    for sel in ["[class*=preparation-step]", "[class*=recipe-step]",
-                "[class*=instruction]", "[class*=zubereitung]",
-                "[class*=preparation]", "[class*=step]"]:
-        for el in soup.select(sel):
-            text = el.get_text(strip=True)
-            if text and len(text) > 15 and text not in schritte:
-                schritte.append(text)
+    # Zubereitung (wenn Schema.org keine hatte)
+    if not ergebnis.get("anleitung"):
+        schritte = []
+        # Spezifische CSS-Selektoren
+        for sel in [
+            "[class*=preparation-step] p", "[class*=preparation-step]",
+            "[class*=recipe-step] p",       "[class*=recipe-step]",
+            "[class*=cooking-step]",         "[class*=step-description]",
+            "ol[class*=preparation] li",     "ol[class*=instruction] li",
+            "ol[class*=step] li",            "ol[class*=zubereitung] li",
+            "[class*=zubereitung] li",       "[class*=zubereitung] p",
+        ]:
+            els = soup.select(sel)
+            gefunden = [el.get_text(strip=True) for el in els
+                        if len(el.get_text(strip=True)) > 20]
+            if gefunden:
+                schritte = gefunden
+                break
+
+        # Fallback: nummerierte <ol> suchen
+        if not schritte:
+            SPAM = re.compile(r"cookie|impressum|datenschutz|newsletter|©|agb|anmeld", re.I)
+            for ol in soup.find_all("ol"):
+                items = [li.get_text(strip=True) for li in ol.find_all("li")
+                         if len(li.get_text(strip=True)) > 20 and not SPAM.search(li.get_text())]
+                if len(items) >= 2:
+                    schritte = items
+                    break
+
+        # Fallback: Absätze die mit einer Zahl beginnen (Kaufland-Nummerierungsformat)
+        if not schritte:
+            SPAM = re.compile(r"cookie|impressum|datenschutz|newsletter|©|agb|anmeld|javascript", re.I)
+            kandidaten = []
+            for el in soup.find_all(["p", "div", "li"]):
+                # Kein Kinder-Block-Element
+                if el.find(["p", "div", "ol", "ul"]):
+                    continue
+                text = el.get_text(strip=True)
+                if re.match(r"^\d+[\.\)]\s+\S", text) and len(text) > 30 and not SPAM.search(text):
+                    kandidaten.append(text)
+            if len(kandidaten) >= 2:
+                schritte = [re.sub(r"^\d+[\.\)]\s+", "", s) for s in kandidaten]
+
         if schritte:
-            break
+            ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
 
-    if not schritte:
-        for p in soup.find_all("p"):
-            text = p.get_text(strip=True)
-            if len(text) > 30 and not re.search(r"cookie|impressum|datenschutz|newsletter|©", text, re.I):
-                schritte.append(text)
-
-    ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
     return ergebnis
 
 def lidl_api_abrufen(url):
-    """Ruft Lidl Rezept direkt über die API ab (oft blockiert)."""
+    """Ruft Lidl Rezept direkt über die API ab."""
     alle_ids = re.findall(r"(\d{4,8})", url)
     if not alle_ids:
         return None
     recipe_id = alle_ids[-1]
+    # Slug aus URL extrahieren (für neuere API)
+    slug_match = re.search(r"/rezeptwelt/([^/?#]+)", url)
+    slug = slug_match.group(1) if slug_match else recipe_id
+
     api_pfade = [
-        f"https://www.lidl-kochen.de/api/recipes/{recipe_id}",
         f"https://www.lidl-kochen.de/api/v2/recipes/{recipe_id}",
+        f"https://www.lidl-kochen.de/api/recipes/{recipe_id}",
         f"https://www.lidl-kochen.de/api/recipe/{recipe_id}",
+        f"https://www.lidl-kochen.de/api/v3/recipes/{recipe_id}",
+        f"https://www.lidl-kochen.de/rezeptwelt/{slug}.json",
     ]
     headers_api = {**HEADERS, "Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
     for api_url in api_pfade:
         try:
-            resp = requests.get(api_url, headers=headers_api, timeout=10)
-            if resp.status_code == 200:
+            resp = requests.get(api_url, headers=headers_api, timeout=8)
+            if resp.status_code == 200 and "application/json" in resp.headers.get("Content-Type", ""):
                 return resp.json()
         except Exception:
             pass
     return None
 
+def ist_js_gerendert(soup):
+    """Erkennt ob eine Seite JavaScript-Rendering benötigt (leere Templates)."""
+    text = soup.get_text()
+    # Vue/Angular Template-Syntax ohne gerenderte Inhalte
+    if soup.find(string=re.compile(r"\[\[\s*\w+")) and len(text.strip()) < 5000:
+        return True
+    # Sehr wenig Text trotz vorhandener Body-Elemente
+    body = soup.find("body")
+    if body and len(body.get_text(strip=True)) < 500:
+        return True
+    return False
+
 def lidl_extrahieren(soup, url=""):
-    """Spezifischer Parser für lidl-kochen.de – nutzt API für Zutaten."""
-    ergebnis = {"titel": "", "beschreibung": "", "portionen": 4,
-                "zutaten": [], "anleitung": "", "quelle": "lidl"}
+    """Parser für lidl-kochen.de / lidl.de – Schema.org → API → HTML."""
 
-    # Titel aus HTML
-    for sel in ["h1", ".recipe-detail-data h1", ".recipe__h1"]:
-        el = soup.select_one(sel)
-        if el:
-            ergebnis["titel"] = el.get_text(strip=True)
-            break
+    # 1. Schema.org versuchen
+    schema = schema_org_extrahieren(soup)
+    if schema and schema.get("titel") and schema.get("zutaten"):
+        schema["quelle"] = "lidl+schema"
+        return schema
 
-    # Beschreibung aus Meta-Tag
+    ergebnis = schema or {"titel": "", "beschreibung": "", "portionen": 4,
+                          "zutaten": [], "anleitung": "", "quelle": "lidl"}
+    ergebnis["quelle"] = "lidl"
+
+    # Titel und Beschreibung immer aus Meta-Tags
+    for attr in [{"property": "og:title"}]:
+        meta = soup.find("meta", attrs=attr)
+        if meta and meta.get("content") and not ergebnis.get("titel"):
+            titel = meta["content"].strip()
+            ergebnis["titel"] = re.sub(r"\s*[-–|]\s*(Rezept|Lidl).*$", "", titel, flags=re.I).strip()
+    if not ergebnis.get("titel"):
+        for sel in ["h1", "[class*=recipe-title]", "[class*=RecipeTitle]"]:
+            el = soup.select_one(sel)
+            if el:
+                t = el.get_text(strip=True)
+                if t and not re.search(r"\[\[", t):
+                    ergebnis["titel"] = t
+                    break
     for attr in [{"property": "og:description"}, {"name": "description"}]:
         meta = soup.find("meta", attrs=attr)
-        if meta and meta.get("content"):
-            ergebnis["beschreibung"] = meta["content"][:250].strip()
+        if meta and meta.get("content") and not ergebnis.get("beschreibung"):
+            ergebnis["beschreibung"] = meta["content"][:300].strip()
             break
 
-    # Anleitung aus HTML (funktioniert bereits)
-    schritte = [el.get_text(strip=True)
-                for el in soup.select(".preparation__step-content-text")
-                if len(el.get_text(strip=True)) > 10]
-    if schritte:
-        ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
-
-    # Zutaten via API
+    # 2. API für Zutaten und Portionen
     api_data = lidl_api_abrufen(url) if url else None
-    if api_data:
-        print(f"  Lidl API Antwort Keys: {list(api_data.keys()) if isinstance(api_data, dict) else type(api_data)}", flush=True)
-        # Portionen
+    if api_data and isinstance(api_data, dict):
         for key in ["portions", "servings", "portionen", "persons"]:
             if key in api_data:
                 try:
                     ergebnis["portionen"] = int(api_data[key])
                 except: pass
                 break
-        # Zutaten aus API
         zutaten_roh = api_data.get("ingredients", api_data.get("ingredientGroups", []))
         if isinstance(zutaten_roh, list):
             for z in zutaten_roh:
                 if isinstance(z, dict):
-                    # Direkte Zutaten
-                    name = z.get("name", z.get("ingredientName", ""))
-                    menge = z.get("quantity", z.get("amount", 1)) or 1
+                    name    = z.get("name", z.get("ingredientName", ""))
+                    menge   = z.get("quantity", z.get("amount", 1)) or 1
                     einheit = z.get("unit", z.get("unitName", "Stück")) or "Stück"
                     if name:
                         ergebnis["zutaten"].append({"name": name, "menge": float(menge), "einheit": einheit})
-                    # Gruppen mit Sub-Zutaten
                     for sub in z.get("ingredients", []):
                         if isinstance(sub, dict):
-                            name = sub.get("name", sub.get("ingredientName", ""))
-                            menge = sub.get("quantity", sub.get("amount", 1)) or 1
-                            einheit = sub.get("unit", sub.get("unitName", "Stück")) or "Stück"
-                            if name:
-                                ergebnis["zutaten"].append({"name": name, "menge": float(menge), "einheit": einheit})
-        if api_data.get("title") and not ergebnis["titel"]:
+                            n = sub.get("name", sub.get("ingredientName", ""))
+                            m = sub.get("quantity", sub.get("amount", 1)) or 1
+                            e = sub.get("unit", sub.get("unitName", "Stück")) or "Stück"
+                            if n:
+                                ergebnis["zutaten"].append({"name": n, "menge": float(m), "einheit": e})
+        if api_data.get("title") and not ergebnis.get("titel"):
             ergebnis["titel"] = api_data["title"]
+
+    # 3. HTML-Fallback Zutaten (funktioniert nur bei SSR)
+    if not ergebnis.get("zutaten"):
+        for sel in [
+            "[class*=ingredient-description]", "[class*=IngredientDescription]",
+            "[class*=ingredient-item]",         "[class*=IngredientItem]",
+            "[class*=ingredient-list] li",      "[class*=IngredientList] li",
+            "[class*=ingredient] li",           "[data-testid*=ingredient]",
+        ]:
+            items = soup.select(sel)
+            gefunden = []
+            for item in items:
+                if item.find(["li", "ul"]):
+                    continue
+                text = item.get_text(strip=True)
+                # Vue-Template-Syntax überspringen
+                if text and 2 < len(text) < 150 and "[[" not in text:
+                    menge, einheit, name = zutat_parsen(text)
+                    gefunden.append({"name": name, "menge": menge, "einheit": einheit})
+            if gefunden:
+                ergebnis["zutaten"] = gefunden
+                break
+
+    # 4. HTML-Fallback Anleitung
+    if not ergebnis.get("anleitung"):
+        schritte = []
+        for sel in [
+            ".preparation__step-content-text",
+            "[class*=preparation-step]", "[class*=PreparationStep]",
+            "[class*=step-description]", "[class*=recipe-step]",
+            "ol[class*=step] li",        "ol[class*=instruction] li",
+        ]:
+            els = soup.select(sel)
+            gefunden = [el.get_text(strip=True) for el in els
+                        if len(el.get_text(strip=True)) > 10 and "[[" not in el.get_text()]
+            if gefunden:
+                schritte = gefunden
+                break
+        if schritte:
+            ergebnis["anleitung"] = "\n".join(f"{i}. {s}" for i, s in enumerate(schritte, 1))
+
+    # 5. Wenn Seite JS-gerendert ist und Zutaten fehlen: Hinweis setzen
+    if not ergebnis.get("zutaten") and ist_js_gerendert(soup):
+        ergebnis["_warnung"] = "js_rendered"
 
     return ergebnis
 
@@ -1258,23 +1439,15 @@ def rezept_von_url(url):
     soup = BeautifulSoup(resp.text, "html.parser")
     domain = url.lower()
 
-    # Debug-Info ins Log schreiben
-    ld_typen = []
-    for tag in soup.find_all("script", type="application/ld+json"):
-        try:
-            d = json.loads(tag.string or "")
-            t = d.get("@type","?") if isinstance(d,dict) else [x.get("@type","?") for x in d if isinstance(x,dict)]
-            ld_typen.append(str(t))
-        except: pass
-    og = soup.find("meta", attrs={"property":"og:description"})
-    meta = soup.find("meta", attrs={"name":"description"})
     def beschreibung_ergaenzen(ergebnis, soup):
         """Ergänzt leere Beschreibung aus Meta-Tags."""
+        if not ergebnis or not isinstance(ergebnis, dict):
+            return ergebnis
         if not ergebnis.get("beschreibung"):
             for attr in [{"name": "description"}, {"property": "og:description"}]:
                 meta = soup.find("meta", attrs=attr)
                 if meta and meta.get("content"):
-                    ergebnis["beschreibung"] = meta["content"][:200].strip()
+                    ergebnis["beschreibung"] = meta["content"][:300].strip()
                     break
         return ergebnis
 
@@ -1284,12 +1457,23 @@ def rezept_von_url(url):
     elif "lidl" in domain:
         ergebnis = lidl_extrahieren(soup, url)
     else:
+        # 2. Schema.org (funktioniert für ~80% aller Rezeptseiten)
         ergebnis = schema_org_extrahieren(soup)
+        # 3. Fallback: HTML-Heuristiken (wenn Schema.org fehlt oder kein Titel)
+        if not ergebnis or not ergebnis.get("titel"):
+            print(f"Web-Import: Schema.org fehlgeschlagen für {domain}, versuche Fallback...", flush=True)
+            ergebnis = fallback_extrahieren(soup, url)
 
     ergebnis = beschreibung_ergaenzen(ergebnis, soup)
 
-    if not ergebnis.get("titel"):
-        return None, "Kein Rezept auf dieser Seite gefunden."
+    if not ergebnis or not ergebnis.get("titel"):
+        return None, "Kein Rezept auf dieser Seite gefunden. Bitte prüfe ob die URL direkt zu einem Rezept führt."
+
+    # Warnung wenn Seite JS-gerendert ist und Zutaten fehlen
+    warnung = ergebnis.pop("_warnung", None)
+    if warnung == "js_rendered" and not ergebnis.get("zutaten"):
+        ergebnis["_hinweis"] = ("⚠️ Diese Seite lädt Inhalte per JavaScript – Zutaten konnten nicht "
+                                "automatisch importiert werden. Bitte Zutaten manuell ergänzen.")
 
     return ergebnis, None
 

@@ -34,12 +34,16 @@
 
   {% if ergebnis %}
 
-  {% if ergebnis.quelle == 'schema.org' %}
+  {% if ergebnis._hinweis %}
+  <div class="alert alert-warning">{{ ergebnis._hinweis }}
+    <a href="{{ url }}" target="_blank" style="color:inherit; font-weight:600; margin-left:8px;">Seite öffnen →</a>
+  </div>
+  {% elif ergebnis.quelle in ['schema.org', 'lidl+schema', 'kaufland+schema'] %}
   <div class="alert alert-success">✅ Rezept automatisch erkannt – bitte prüfen und speichern.</div>
   {% elif ergebnis.quelle == 'lidl' %}
   <div class="alert alert-warning">
-    ⚠️ <strong>Lidl lädt Zutaten per JavaScript nach</strong> – diese können leider nicht automatisch importiert werden.
-    Anleitung wurde importiert. Bitte Zutaten manuell aus der Lidl-Seite übertragen.
+    ⚠️ <strong>Lidl-Kochen lädt Zutaten per JavaScript</strong> – automatischer Import nicht möglich.
+    Bitte Zutaten manuell aus der Lidl-Seite übertragen.
     <a href="{{ url }}" target="_blank" style="color:inherit; font-weight:600;">Lidl-Seite öffnen →</a>
   </div>
   {% else %}

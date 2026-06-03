@@ -103,10 +103,14 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ## 📝 Changelog
 
 ### 1.5.5
-- 🌐 Web-Import: Kaufland Zutaten im Pipe-Format (`300 g | grüner Spargel`) werden korrekt erkannt
-- 🌐 Web-Import: Kaufland Zubereitung wird jetzt zuverlässig geladen
-- 🌐 Web-Import: Lidl-Kochen.de erkennt JavaScript-gerenderte Seiten und zeigt klare Benutzerwarnung
-- 🌐 Web-Import: Schema.org Parser unterstützt `HowToSection`, verschachtelte Anleitungen und `@graph`-Format
+- ✅ **Lidl-Import funktioniert jetzt vollständig** – Zutaten UND Anleitung werden geladen
+  (Schema.org-JSON mit Steuerzeichen wird jetzt korrekt geparst, `strict=False`)
+- ✅ **Kaufland-Zubereitung wird jetzt geladen** – Schritt-Text aus Microdata (`content`-Attribut)
+  und `cooking-description` ausgelesen
+- 🌐 Kaufland-Zutaten: korrekte Mengen/Einheiten aus der Zutaten-Tabelle
+- 🧺 Zutaten-Parser erkennt nachgestellte Mengen (`Frühlingszwiebeln 3 St.`, `Salz Prise`)
+- 🔤 Einheiten-Normalisierung: `St`/`Stk` → `Stück`, `Pkg` → `Packung`
+- 🌐 Schema.org Parser unterstützt `HowToSection`, verschachtelte Anleitungen und `@graph`-Format
 - 🐛 Fix: `fallback_extrahieren()` wird jetzt korrekt aufgerufen wenn Schema.org leer zurückgibt
 
 ### 1.5.4

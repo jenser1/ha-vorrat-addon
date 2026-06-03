@@ -949,13 +949,19 @@ def menge_parsen(wert):
     except:
         return 1.0
 
+def _einheit_norm(e):
+    """Normalisiert Einheiten-Schreibweisen auf die Dropdown-Werte."""
+    e = (e or "").strip().rstrip(".")
+    mapping = {"st": "Stück", "stk": "Stück", "stück": "Stück", "pkg": "Packung"}
+    return mapping.get(e.lower(), e)
+
 def zutat_parsen(text):
     """Zerlegt einen Zutaten-String in Menge, Einheit und Name."""
     text = html_bereinigen(text).strip()
     einheiten = ["g", "kg", "ml", "l", "EL", "TL", "Prise", "Bund", "Stück",
                  "Dose", "Packung", "Pkg", "Tasse", "Becher", "Scheibe",
                  "Scheiben", "Zehe", "Zehen", "cm", "tbsp", "tsp", "cup",
-                 "oz", "lb", "handful", "bunch"]
+                 "oz", "lb", "handful", "bunch", "St", "St.", "Stk", "Stk."]
 
     # Kaufland-Format: "300 g | grüner Spargel" oder "4 | TK-Lachsfilets"
     if "|" in text:
@@ -969,7 +975,7 @@ def zutat_parsen(text):
                 + "|".join(re.escape(e) for e in einheiten)
                 + r")\.?\s*$", menge_teil, re.I)
             if m:
-                return menge_parsen(m.group(1)), m.group(2), name_teil
+                return menge_parsen(m.group(1)), _einheit_norm(m.group(2)), name_teil
             # Nur Zahl links
             m2 = re.match(r"^([\d½¼¾⅓⅔][,\.\d\s\/]*)\s*$", menge_teil)
             if m2:
@@ -983,18 +989,35 @@ def zutat_parsen(text):
         + "|".join(re.escape(e) for e in einheiten)
         + r")\.?\s+(.+)$", text, re.I)
     if m:
-        return menge_parsen(m.group(1)), m.group(2), m.group(3).strip()
+        return menge_parsen(m.group(1)), _einheit_norm(m.group(2)), m.group(3).strip()
     # Nur Zahl am Anfang
     m2 = re.match(r"^([\d½¼¾⅓⅔][\d\s\/,\.]*?)\s+(.+)$", text)
     if m2:
         return menge_parsen(m2.group(1)), "Stück", m2.group(2).strip()
+
+    # Nachgestellte Menge (Lidl-Format): "Frühlingszwiebeln 3 St." / "Cherrytomaten 300 g"
+    m3 = re.match(
+        r"^(.+?)\s+([\d½¼¾⅓⅔][\d\s\/,\.]*)\s*("
+        + "|".join(re.escape(e) for e in einheiten)
+        + r")\.?\s*$", text, re.I)
+    if m3:
+        return menge_parsen(m3.group(2)), _einheit_norm(m3.group(3)), m3.group(1).strip()
+
+    # Nachgestellte einheit-ohne-Zahl: "Salz Prise" / "Chiliflocken Prise"
+    m4 = re.match(r"^(.+?)\s+(Prise|Bund|Handvoll|etwas|nach Geschmack)\.?\s*$", text, re.I)
+    if m4:
+        return 1.0, m4.group(2), m4.group(1).strip()
+
     return 1.0, "Stück", text
 
 def schema_org_extrahieren(soup):
     """Extrahiert Rezept aus Schema.org JSON-LD – funktioniert für ~80% aller Rezeptseiten."""
     for tag in soup.find_all("script", type="application/ld+json"):
         try:
-            data = json.loads(tag.string or "")
+            roh = tag.string or tag.get_text() or ""
+            # strict=False erlaubt Steuerzeichen (\r\n) im JSON – z.B. Lidl
+            # hat unescaped Zeilenumbrüche in recipeInstructions, was sonst crasht
+            data = json.loads(roh, strict=False)
 
             # Alle Kandidaten sammeln: Array, @graph oder einzelnes Objekt
             kandidaten = []
@@ -1233,21 +1256,36 @@ def kaufland_extrahieren(soup):
     # Zubereitung (wenn Schema.org keine hatte)
     if not ergebnis.get("anleitung"):
         schritte = []
-        # Spezifische CSS-Selektoren
-        for sel in [
-            "[class*=preparation-step] p", "[class*=preparation-step]",
-            "[class*=recipe-step] p",       "[class*=recipe-step]",
-            "[class*=cooking-step]",         "[class*=step-description]",
-            "ol[class*=preparation] li",     "ol[class*=instruction] li",
-            "ol[class*=step] li",            "ol[class*=zubereitung] li",
-            "[class*=zubereitung] li",       "[class*=zubereitung] p",
-        ]:
-            els = soup.select(sel)
-            gefunden = [el.get_text(strip=True) for el in els
-                        if len(el.get_text(strip=True)) > 20]
-            if gefunden:
-                schritte = gefunden
-                break
+
+        # Kaufland-Microdata: <span itemprop="recipeInstructions" content="...">
+        # Der Schritt-Text steht im content-Attribut, nicht im Element-Text
+        microdata = soup.select("[itemprop=recipeInstructions][content]")
+        md_texte = []
+        for sp in microdata:
+            txt = (sp.get("content") or "").strip()
+            txt = re.sub(r"^\d+[\.\)]\s*", "", txt)  # führende "1. " entfernen
+            if len(txt) > 20:
+                md_texte.append(txt)
+        if md_texte:
+            schritte = md_texte
+
+        # Spezifische CSS-Selektoren (Kaufland: cooking-description enthält den Text)
+        if not schritte:
+            for sel in [
+                "[class*=cooking-description]",
+                "[class*=preparation-step] p", "[class*=preparation-step]",
+                "[class*=recipe-step] p",       "[class*=recipe-step]",
+                "[class*=cooking-step] p",       "[class*=step-description]",
+                "ol[class*=preparation] li",     "ol[class*=instruction] li",
+                "ol[class*=step] li",            "ol[class*=zubereitung] li",
+                "[class*=zubereitung] li",       "[class*=zubereitung] p",
+            ]:
+                els = soup.select(sel)
+                gefunden = [el.get_text(strip=True) for el in els
+                            if len(el.get_text(strip=True)) > 20]
+                if gefunden:
+                    schritte = gefunden
+                    break
 
         # Fallback: nummerierte <ol> suchen
         if not schritte:

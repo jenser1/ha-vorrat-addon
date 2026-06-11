@@ -20,9 +20,21 @@
     {% if woche == 0 %}<span style="color:var(--primary); font-size:0.8rem; margin-left:6px;">(diese Woche)</span>{% endif %}
   </div>
   <a href="{{ url_for('essensplan', woche=woche+1) }}" class="btn btn-sm btn-ghost">›</a>
-  {% if woche != 0 %}
-  <a href="{{ url_for('essensplan') }}" class="btn btn-sm btn-primary" style="margin-left:auto;">↩ Heute</a>
-  {% endif %}
+  <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+    {% if woche != 0 %}
+    <a href="{{ url_for('essensplan') }}" class="btn btn-sm btn-ghost">↩ Heute</a>
+    {% endif %}
+    {% if kalender_aktiv %}
+    <form method="post" action="{{ url_for('essensplan_sync') }}" style="display:inline;">
+      <input type="hidden" name="woche" value="{{ woche }}">
+      <button type="submit" class="btn btn-sm btn-primary"
+              title="Diese Woche in den HA-Kalender schreiben">📅 In HA-Kalender übertragen</button>
+    </form>
+    {% else %}
+    <a href="{{ url_for('einstellungen') }}" class="btn btn-sm btn-ghost"
+       title="Kalender in den Einstellungen aktivieren">📅 Kalender einrichten</a>
+    {% endif %}
+  </div>
 </div>
 
 <!-- Wochen-Raster -->

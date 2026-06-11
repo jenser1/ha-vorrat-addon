@@ -109,6 +109,40 @@
     </div>
   </form>
 
+  <!-- HA-Kalender für Essensplaner -->
+  <form method="post">
+    <div class="card">
+      <div class="card-title" style="margin-bottom:6px;">📅 Essensplaner → HA-Kalender</div>
+      <p style="color:var(--muted); font-size:0.82rem; margin-bottom:14px;">
+        Wähle einen Home-Assistant-Kalender. Über den Button „In HA-Kalender übertragen"
+        im Essensplaner werden geplante Mahlzeiten dorthin geschrieben.
+      </p>
+
+      {% if kalender %}
+      <div class="form-group" style="margin-bottom:16px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          Ziel-Kalender
+        </label>
+        <select name="kalender_entity" style="width:100%;">
+          <option value="">— kein Kalender (Übertragung aus) —</option>
+          {% for k in kalender %}
+          <option value="{{ k.entity_id }}" {{ 'selected' if settings.kalender_entity == k.entity_id }}>
+            {{ k.name }} ({{ k.entity_id }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%;">💾 Kalender speichern</button>
+      {% else %}
+      <div class="alert alert-warning" style="margin:0;">
+        ⚠️ Kein Kalender gefunden. Lege in Home Assistant zuerst einen Kalender an:<br>
+        <strong>Einstellungen → Geräte &amp; Dienste → Integration hinzufügen → „Lokaler Kalender"</strong>,
+        dann diese Seite neu laden.
+      </div>
+      {% endif %}
+    </div>
+  </form>
+
   <!-- Vorschau -->
   <div class="card">
     <div class="card-title" style="margin-bottom:12px;">👁️ Vorschau</div>

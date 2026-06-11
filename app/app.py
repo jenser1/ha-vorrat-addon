@@ -79,6 +79,7 @@ class Einstellungen(db.Model):
     waehrung = db.Column(db.String(5), default="EUR")
     theme = db.Column(db.String(20), default="light")
     farbe = db.Column(db.String(20), default="blau")
+    kalender_entity = db.Column(db.String(100), default="")
 
 class Essensplan(db.Model):
     """Geplante Mahlzeit an einem Tag (Frühstück/Mittag/Abend)."""
@@ -1585,11 +1586,13 @@ def essensplan():
 
     rezepte_liste = Rezept.query.order_by(Rezept.name).all()
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
+    kalender_aktiv = bool((get_settings().kalender_entity or "").strip())
 
     return render_template("essensplan.html",
         tage=tage, mahlzeiten=MAHLZEITEN, plan=plan,
         rezepte=rezepte_liste, woche=woche, heute=heute,
         montag=montag, sonntag=tage[-1],
+        kalender_aktiv=kalender_aktiv,
         einkauf_count=einkauf_count)
 
 @app.route("/essensplan/setzen", methods=["POST"])
@@ -1641,6 +1644,69 @@ def essensplan_loeschen(id):
     db.session.commit()
     return redirect(url_for("essensplan", woche=woche))
 
+@app.route("/essensplan/sync", methods=["POST"])
+def essensplan_sync():
+    """Überträgt die Mahlzeiten einer Woche in den gewählten HA-Kalender.
+    Vorgehen: alte vom Add-on erstellte Einträge der Woche löschen, dann neu schreiben."""
+    woche = request.form.get("woche", "0")
+    try:
+        woche_i = int(woche)
+    except ValueError:
+        woche_i = 0
+
+    s = get_settings()
+    ent = (s.kalender_entity or "").strip()
+    if not ent:
+        flash("Bitte zuerst in den Einstellungen einen HA-Kalender auswählen.", "danger")
+        return redirect(url_for("einstellungen"))
+
+    if not os.environ.get("SUPERVISOR_TOKEN", ""):
+        flash("HA-Kalender nur innerhalb von Home Assistant verfügbar.", "danger")
+        return redirect(url_for("essensplan", woche=woche))
+
+    heute = date.today()
+    montag = heute - timedelta(days=heute.weekday()) + timedelta(weeks=woche_i)
+    sonntag = montag + timedelta(days=6)
+
+    # 1. Alte, vom Add-on erstellte Einträge dieser Woche löschen
+    geloescht = 0
+    try:
+        events = ha_kalender_events_holen(
+            ent, montag.isoformat() + "T00:00:00",
+            (sonntag + timedelta(days=1)).isoformat() + "T00:00:00")
+        for e in events:
+            if KAL_MARKER in (e.get("description") or ""):
+                if ha_kalender_event_loeschen(ent, e.get("uid")):
+                    geloescht += 1
+    except Exception as ex:
+        print(f"HA Kalender Lesen/Löschen Fehler: {ex}", flush=True)
+
+    # 2. Aktuelle Wochen-Mahlzeiten neu schreiben
+    eintraege = Essensplan.query.filter(
+        Essensplan.datum >= montag, Essensplan.datum <= sonntag).all()
+    erstellt = 0
+    fehler = 0
+    for ev in eintraege:
+        name = ev.rezept.name if ev.rezept else ev.freitext
+        if not name:
+            continue
+        label = dict(MAHLZEITEN).get(ev.mahlzeit, ev.mahlzeit)
+        summary = f"{label}: {name}"
+        z1, z2 = MAHLZEIT_ZEIT.get(ev.mahlzeit, ("12:00:00", "12:30:00"))
+        start_dt = f"{ev.datum.isoformat()} {z1}"
+        end_dt = f"{ev.datum.isoformat()} {z2}"
+        if ha_kalender_event_erstellen(ent, summary, start_dt, end_dt,
+                                       f"Geplant über Vorratsverwaltung {KAL_MARKER}"):
+            erstellt += 1
+        else:
+            fehler += 1
+
+    if fehler:
+        flash(f"HA-Kalender: {erstellt} übertragen, {geloescht} ersetzt, {fehler} fehlgeschlagen – siehe Add-on-Log.", "danger")
+    else:
+        flash(f"✅ HA-Kalender aktualisiert: {erstellt} Mahlzeiten übertragen ({geloescht} alte ersetzt).", "success")
+    return redirect(url_for("essensplan", woche=woche))
+
 # ── Einstellungen Route ────────────────────────────────────────────────────────
 
 @app.route("/einstellungen", methods=["GET", "POST"])
@@ -1648,15 +1714,115 @@ def einstellungen():
     s = get_settings()
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     if request.method == "POST":
-        s.sprache = request.form.get("sprache", "de")
-        s.waehrung = request.form.get("waehrung", "EUR")
-        s.theme = request.form.get("theme", "light")
-        s.farbe = request.form.get("farbe", "blau")
+        # Bestehende Werte als Default → Teil-Formulare setzen nichts zurück
+        s.sprache = request.form.get("sprache", s.sprache)
+        s.waehrung = request.form.get("waehrung", s.waehrung)
+        s.theme = request.form.get("theme", s.theme)
+        s.farbe = request.form.get("farbe", s.farbe)
+        if "kalender_entity" in request.form:
+            s.kalender_entity = request.form.get("kalender_entity", "").strip()
         db.session.commit()
         flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("einstellungen"))
+    kalender = ha_kalender_liste()
     return render_template("einstellungen.html",
-        settings=s, einkauf_count=einkauf_count)
+        settings=s, einkauf_count=einkauf_count, kalender=kalender)
+
+# ── HA Kalender Integration ───────────────────────────────────────────────────
+
+KAL_MARKER = "[essensplan]"  # Erkennt vom Add-on erstellte Kalender-Einträge
+MAHLZEIT_ZEIT = {
+    "fruehstueck": ("08:00:00", "08:30:00"),
+    "mittag":      ("12:00:00", "12:30:00"),
+    "abend":       ("18:00:00", "18:30:00"),
+}
+
+def _ha_api():
+    """Gibt (API-Basis-URL, Header) zurück – oder (None, None) außerhalb HA."""
+    token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if not token:
+        return None, None
+    return "http://supervisor/core/api", {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+def ha_kalender_liste():
+    """Liefert alle verfügbaren calendar.* Entitäten aus Home Assistant."""
+    api, hdr = _ha_api()
+    if not api:
+        return []
+    try:
+        r = requests.get(f"{api}/states", headers=hdr, timeout=10)
+        r.raise_for_status()
+        return sorted([
+            {"entity_id": s["entity_id"],
+             "name": s.get("attributes", {}).get("friendly_name", s["entity_id"])}
+            for s in r.json() if s["entity_id"].startswith("calendar.")
+        ], key=lambda c: c["name"].lower())
+    except Exception as e:
+        print(f"HA Kalender-Liste Fehler: {e}", flush=True)
+        return []
+
+def ha_kalender_events_holen(ent, start_iso, end_iso):
+    """Liest Kalender-Events im Zeitraum (REST, read-only)."""
+    api, hdr = _ha_api()
+    if not api:
+        return []
+    r = requests.get(f"{api}/calendars/{ent}", headers=hdr,
+                     params={"start": start_iso, "end": end_iso}, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+def ha_kalender_event_erstellen(ent, summary, start_dt, end_dt, description):
+    """Erstellt ein Kalender-Event via calendar.create_event Service (REST)."""
+    api, hdr = _ha_api()
+    if not api:
+        return False
+    try:
+        r = requests.post(f"{api}/services/calendar/create_event", headers=hdr,
+            json={"entity_id": ent, "summary": summary,
+                  "start_date_time": start_dt, "end_date_time": end_dt,
+                  "description": description}, timeout=10)
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"HA Kalender create Fehler ({ent}): {e}", flush=True)
+        return False
+
+def ha_kalender_event_loeschen(ent, uid):
+    """Löscht ein Kalender-Event via WebSocket (REST kann das nicht)."""
+    token = os.environ.get("SUPERVISOR_TOKEN", "")
+    if not token or not uid:
+        return False
+    try:
+        import websocket  # websocket-client
+    except ImportError:
+        print("HA Kalender löschen: websocket-client fehlt", flush=True)
+        return False
+    ws = None
+    try:
+        ws = websocket.create_connection("ws://supervisor/core/websocket", timeout=10)
+        first = json.loads(ws.recv())
+        if first.get("type") == "auth_required":
+            ws.send(json.dumps({"type": "auth", "access_token": token}))
+            auth = json.loads(ws.recv())
+            if auth.get("type") != "auth_ok":
+                print(f"HA Kalender WS Auth fehlgeschlagen: {auth}", flush=True)
+                return False
+        ws.send(json.dumps({"id": 1, "type": "calendar/event/delete",
+                            "entity_id": ent, "uid": uid}))
+        resp = json.loads(ws.recv())
+        if not resp.get("success"):
+            print(f"HA Kalender löschen fehlgeschlagen: {resp}", flush=True)
+        return bool(resp.get("success"))
+    except Exception as e:
+        print(f"HA Kalender löschen Fehler ({ent}): {e}", flush=True)
+        return False
+    finally:
+        if ws:
+            try: ws.close()
+            except Exception: pass
 
 # ── HA Sensor Integration ─────────────────────────────────────────────────────
 
@@ -1827,6 +1993,7 @@ def db_migrieren():
         for spalte, typ in [
             ("theme", "VARCHAR(20) DEFAULT 'light'"),
             ("farbe", "VARCHAR(20) DEFAULT 'blau'"),
+            ("kalender_entity", "VARCHAR(100) DEFAULT ''"),
         ]:
             if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", spalte):
                 cur.execute(f"ALTER TABLE einstellungen ADD COLUMN {spalte} {typ}")

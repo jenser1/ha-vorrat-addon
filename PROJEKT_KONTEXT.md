@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.5.5
+**Aktuelle Version:** 1.5.6
 
 ---
 
@@ -64,7 +64,11 @@ Rezept: id, name, beschreibung, anleitung, portionen,
 
 RezeptZutat: id, rezept_id, name, menge, einheit
 
-Einstellungen: id, sprache, waehrung, theme, farbe
+Einstellungen: id, sprache, waehrung, theme, farbe, kalender_entity
+
+Essensplan: id, datum, mahlzeit (fruehstueck/mittag/abend),
+            rezept_id, freitext, erstellt, cal_synced_at
+            (UNIQUE: datum + mahlzeit)
 ```
 
 ---
@@ -118,6 +122,11 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - HA Dashboard-Sensoren (abgelaufen, bald, unter Minimum)
 - 🛒 Button: Produkte direkt zur Einkaufsliste
 - Produkte direkt zur Einkaufsliste hinzufügen (Modal)
+- 📅 Essensplaner (Wochenansicht, Frühstück/Mittag/Abend, Rezept/Freitext)
+- 📅 HA-Kalender-Anbindung (Zwei-Wege-Sync über Lokaler Kalender)
+  - REST calendar.create_event zum Erstellen, GET /calendars zum Lesen
+  - WebSocket calendar/event/delete zum Löschen (websocket-client)
+  - Marker [essensplan:ID] in der Event-Beschreibung; cal_synced_at + 90s-Schutz
 
 ### 🔧 Bekannte Einschränkungen
 - Lidl-Kochen: Zutaten werden per JavaScript geladen

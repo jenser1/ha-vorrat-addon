@@ -29,6 +29,12 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **Web-Import** von Chefkoch, Kaufland, Lidl und hunderten weiteren Seiten
 - Filter und Sortierung nach Kategorie
 
+### 📅 Essensplaner
+- Wochenansicht mit **Frühstück / Mittag / Abend**
+- Pro Mahlzeit: vorhandenes Rezept **oder** eigener Freitext
+- **Anbindung an den Home-Assistant-Kalender** (Zwei-Wege-Sync)
+- Im HA-Kalender gelöschte Mahlzeiten verschwinden auch aus dem Planer
+
 ### 📊 Dashboard-Sensoren
 Automatisch verfügbare HA-Sensoren:
 | Sensor | Beschreibung |
@@ -74,6 +80,7 @@ entities:
   - sensor.vorrat_kritisch
   - sensor.vorrat_unter_mindestmenge
   - sensor.vorrat_gesamt
+  - sensor.vorrat_einkaufsliste
 ```
 
 ---
@@ -101,6 +108,16 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.5.6
+- 📅 **Essensplaner** – Wochenansicht mit Frühstück / Mittag / Abend
+- 🔗 Pro Mahlzeit: vorhandenes Rezept **oder** eigener Freitext
+- 🗓️ **HA-Kalender-Anbindung** (Zwei-Wege): geplante Mahlzeiten landen automatisch
+  im gewählten Home-Assistant-Kalender
+- ↩️ Im HA-Kalender gelöschte Mahlzeiten verschwinden auch aus dem Planer
+- 🛡️ Schutz vor Fehllöschungen (nur >90 s synchronisierte Einträge werden abgeglichen)
+- ⚙️ Einstellungen: Ziel-Kalender auswählen (automatische Erkennung)
+- 📊 Dashboard-Beispiel: `sensor.vorrat_einkaufsliste` ergänzt
 
 ### 1.5.5
 - ✅ **Lidl-Import funktioniert jetzt vollständig** – Zutaten UND Anleitung werden geladen

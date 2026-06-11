@@ -80,6 +80,17 @@ class Einstellungen(db.Model):
     theme = db.Column(db.String(20), default="light")
     farbe = db.Column(db.String(20), default="blau")
 
+class Essensplan(db.Model):
+    """Geplante Mahlzeit an einem Tag (Frühstück/Mittag/Abend)."""
+    id = db.Column(db.Integer, primary_key=True)
+    datum = db.Column(db.Date, nullable=False)
+    mahlzeit = db.Column(db.String(20), nullable=False)  # fruehstueck, mittag, abend
+    rezept_id = db.Column(db.Integer, db.ForeignKey("rezept.id", ondelete="SET NULL"), nullable=True)
+    freitext = db.Column(db.String(200), default="")
+    erstellt = db.Column(db.DateTime, default=datetime.utcnow)
+    rezept = db.relationship("Rezept", lazy=True)
+    __table_args__ = (db.UniqueConstraint("datum", "mahlzeit", name="uq_essensplan_slot"),)
+
 # ── PDF Extraktion ────────────────────────────────────────────────────────────
 
 def pdf_text_bereinigen(text):
@@ -1544,6 +1555,92 @@ def rezept_web_import():
         ergebnis=ergebnis, url=url, fehler=fehler,
         debug=debug, einheiten=EINHEITEN, einkauf_count=einkauf_count)
 
+# ── Essensplaner Routen ────────────────────────────────────────────────────────
+
+MAHLZEITEN = [
+    ("fruehstueck", "🌅 Frühstück"),
+    ("mittag",      "☀️ Mittag"),
+    ("abend",       "🌙 Abend"),
+]
+
+@app.route("/essensplan")
+def essensplan():
+    # Wochen-Offset (0 = aktuelle Woche)
+    try:
+        woche = int(request.args.get("woche", 0))
+    except ValueError:
+        woche = 0
+
+    heute = date.today()
+    # Montag der Zielwoche
+    montag = heute - timedelta(days=heute.weekday()) + timedelta(weeks=woche)
+    tage = [montag + timedelta(days=i) for i in range(7)]
+
+    # Geplante Einträge der Woche laden → dict[(datum, mahlzeit)] = Eintrag
+    eintraege = Essensplan.query.filter(
+        Essensplan.datum >= tage[0],
+        Essensplan.datum <= tage[-1]
+    ).all()
+    plan = {f"{e.datum.isoformat()}|{e.mahlzeit}": e for e in eintraege}
+
+    rezepte_liste = Rezept.query.order_by(Rezept.name).all()
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
+
+    return render_template("essensplan.html",
+        tage=tage, mahlzeiten=MAHLZEITEN, plan=plan,
+        rezepte=rezepte_liste, woche=woche, heute=heute,
+        montag=montag, sonntag=tage[-1],
+        einkauf_count=einkauf_count)
+
+@app.route("/essensplan/setzen", methods=["POST"])
+def essensplan_setzen():
+    woche = request.form.get("woche", "0")
+    try:
+        datum = datetime.strptime(request.form.get("datum", ""), "%Y-%m-%d").date()
+    except ValueError:
+        flash("Ungültiges Datum.", "danger")
+        return redirect(url_for("essensplan", woche=woche))
+
+    mahlzeit = request.form.get("mahlzeit", "")
+    if mahlzeit not in dict(MAHLZEITEN):
+        flash("Ungültige Mahlzeit.", "danger")
+        return redirect(url_for("essensplan", woche=woche))
+
+    rezept_id = request.form.get("rezept_id") or None
+    freitext = request.form.get("freitext", "").strip()
+    if rezept_id:
+        try:
+            rezept_id = int(rezept_id)
+        except ValueError:
+            rezept_id = None
+
+    eintrag = Essensplan.query.filter_by(datum=datum, mahlzeit=mahlzeit).first()
+
+    # Leer → vorhandenen Eintrag löschen
+    if not rezept_id and not freitext:
+        if eintrag:
+            db.session.delete(eintrag)
+            db.session.commit()
+        return redirect(url_for("essensplan", woche=woche))
+
+    if eintrag:
+        eintrag.rezept_id = rezept_id
+        eintrag.freitext = freitext if not rezept_id else ""
+    else:
+        eintrag = Essensplan(datum=datum, mahlzeit=mahlzeit,
+            rezept_id=rezept_id, freitext=freitext if not rezept_id else "")
+        db.session.add(eintrag)
+    db.session.commit()
+    return redirect(url_for("essensplan", woche=woche))
+
+@app.route("/essensplan/<int:id>/loeschen", methods=["POST"])
+def essensplan_loeschen(id):
+    woche = request.form.get("woche", "0")
+    eintrag = Essensplan.query.get_or_404(id)
+    db.session.delete(eintrag)
+    db.session.commit()
+    return redirect(url_for("essensplan", woche=woche))
+
 # ── Einstellungen Route ────────────────────────────────────────────────────────
 
 @app.route("/einstellungen", methods=["GET", "POST"])
@@ -1746,6 +1843,19 @@ def db_migrieren():
         # rezept neue Spalten
         if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):
             cur.execute("ALTER TABLE rezept ADD COLUMN quell_url VARCHAR(500) DEFAULT ''")
+            conn.commit()
+
+        # essensplan
+        if not tabelle_existiert("essensplan"):
+            cur.execute("""CREATE TABLE essensplan (
+                id INTEGER PRIMARY KEY,
+                datum DATE NOT NULL,
+                mahlzeit VARCHAR(20) NOT NULL,
+                rezept_id INTEGER,
+                freitext VARCHAR(200) DEFAULT '',
+                erstellt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(datum, mahlzeit)
+            )""")
             conn.commit()
 
         conn.close()

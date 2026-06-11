@@ -452,6 +452,11 @@
     <span class="icon">⚙️</span><span>{{ t.settings if t is defined else 'Einstellungen' }}</span>
   </a>
 
+  <div class="sidebar-section">Planung</div>
+  <a href="{{ url_for('essensplan') }}" class="{{ 'active' if request.endpoint == 'essensplan' }}">
+    <span class="icon">📅</span><span>Essensplaner</span>
+  </a>
+
   <div class="sidebar-section">Rezepte</div>
   <a href="{{ url_for('rezepte') }}" class="{{ 'active' if request.endpoint in ['rezepte','rezept_detail'] }}">
     <span class="icon">📖</span><span>Alle Rezepte</span>
@@ -511,6 +516,10 @@
   <a href="{{ url_for('rezepte') }}" class="nav-item {{ 'active' if request.endpoint in ['rezepte','rezept_detail'] }}">
     <span class="nav-icon">📖</span>
     <span>Rezepte</span>
+  </a>
+  <a href="{{ url_for('essensplan') }}" class="nav-item {{ 'active' if request.endpoint == 'essensplan' }}">
+    <span class="nav-icon">📅</span>
+    <span>Planer</span>
   </a>
   <a href="{{ url_for('produkt_neu') }}" class="nav-item {{ 'active' if request.endpoint == 'produkt_neu' }}">
     <span class="nav-icon">➕</span>

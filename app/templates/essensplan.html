@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Essensplaner{% endblock %}
+{% block page_title %}Essensplaner{% endblock %}
+
+{% set wochentage = ['Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag','Sonntag'] %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('essensplan', woche=woche-1) }}" class="btn btn-ghost">‹ Woche</a>
+  <a href="{{ url_for('essensplan') }}" class="btn btn-ghost" style="margin-left:6px;">Heute</a>
+  <a href="{{ url_for('essensplan', woche=woche+1) }}" class="btn btn-ghost" style="margin-left:6px;">Woche ›</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- Wochen-Kopf -->
+<div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:18px;">
+  <a href="{{ url_for('essensplan', woche=woche-1) }}" class="btn btn-sm btn-ghost">‹</a>
+  <div style="font-weight:700; font-size:1.05rem;">
+    {{ montag.strftime('%d.%m.') }} – {{ sonntag.strftime('%d.%m.%Y') }}
+    {% if woche == 0 %}<span style="color:var(--primary); font-size:0.8rem; margin-left:6px;">(diese Woche)</span>{% endif %}
+  </div>
+  <a href="{{ url_for('essensplan', woche=woche+1) }}" class="btn btn-sm btn-ghost">›</a>
+  {% if woche != 0 %}
+  <a href="{{ url_for('essensplan') }}" class="btn btn-sm btn-primary" style="margin-left:auto;">↩ Heute</a>
+  {% endif %}
+</div>
+
+<!-- Wochen-Raster -->
+<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px;">
+  {% for tag in tage %}
+  {% set ist_heute = (tag == heute) %}
+  {% set tag_name = wochentage[loop.index0] %}
+  <div class="card" style="margin-bottom:0; padding:0; overflow:hidden;
+       {% if ist_heute %}border:2px solid var(--primary);{% endif %}">
+
+    <!-- Tageskopf -->
+    <div style="padding:10px 12px; background:{% if ist_heute %}var(--primary){% else %}var(--border){% endif %};
+         color:{% if ist_heute %}#fff{% else %}inherit{% endif %};">
+      <div style="font-weight:700; font-size:0.9rem;">{{ tag_name }}</div>
+      <div style="font-size:0.75rem; opacity:0.85;">{{ tag.strftime('%d.%m.') }}</div>
+    </div>
+
+    <!-- Mahlzeiten -->
+    <div style="padding:8px;">
+      {% for m_key, m_label in mahlzeiten %}
+      {% set eintrag = plan.get(tag.isoformat() ~ '|' ~ m_key) %}
+      <div style="margin-bottom:6px;">
+        <div style="font-size:0.68rem; color:var(--muted); text-transform:uppercase;
+             letter-spacing:0.04em; margin-bottom:2px;">{{ m_label }}</div>
+
+        {% if eintrag %}
+          <div style="display:flex; align-items:center; gap:4px; background:var(--border);
+               border-radius:7px; padding:6px 8px; cursor:pointer;"
+               onclick='slotOeffnen({{ tag.isoformat() | tojson }}, {{ m_key | tojson }}, {{ (tag_name ~ " · " ~ m_label) | tojson }}, {{ eintrag.rezept_id or 0 }}, {{ eintrag.freitext | tojson }})'>
+            <span style="flex:1; font-size:0.82rem; line-height:1.25; overflow:hidden;">
+              {% if eintrag.rezept %}🍽️ {{ eintrag.rezept.name }}{% else %}📝 {{ eintrag.freitext }}{% endif %}
+            </span>
+            <form method="post" action="{{ url_for('essensplan_loeschen', id=eintrag.id) }}"
+                  onclick="event.stopPropagation();" style="display:inline;">
+              <input type="hidden" name="woche" value="{{ woche }}">
+              <button type="submit" title="Entfernen"
+                      style="background:none; border:none; cursor:pointer; color:var(--muted); font-size:0.9rem; padding:0 2px;">✕</button>
+            </form>
+          </div>
+        {% else %}
+          <button type="button"
+                  onclick='slotOeffnen({{ tag.isoformat() | tojson }}, {{ m_key | tojson }}, {{ (tag_name ~ " · " ~ m_label) | tojson }}, 0, "")'
+                  style="width:100%; text-align:left; background:none; border:1px dashed var(--border);
+                         border-radius:7px; padding:6px 8px; cursor:pointer; color:var(--muted); font-size:0.8rem;">
+            + hinzufügen
+          </button>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<p style="color:var(--muted); font-size:0.8rem; margin-top:16px;">
+  💡 Tipp: Tippe auf eine Mahlzeit, um ein Rezept oder einen eigenen Text einzutragen.
+</p>
+
+<!-- Modal -->
+<div id="slot-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+     z-index:1000; align-items:center; justify-content:center; padding:16px;">
+  <div class="card" style="max-width:420px; width:100%; margin:0;">
+    <div class="card-title" id="slot-titel" style="margin-bottom:14px;">Mahlzeit planen</div>
+    <form method="post" action="{{ url_for('essensplan_setzen') }}">
+      <input type="hidden" name="datum" id="slot-datum">
+      <input type="hidden" name="mahlzeit" id="slot-mahlzeit">
+      <input type="hidden" name="woche" value="{{ woche }}">
+
+      <div class="form-group" style="margin-bottom:14px;">
+        <label>🍽️ Rezept auswählen</label>
+        <select name="rezept_id" id="slot-rezept" onchange="if(this.value){document.getElementById('slot-freitext').value='';}">
+          <option value="">— kein Rezept —</option>
+          {% for r in rezepte %}
+          <option value="{{ r.id }}">{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div style="text-align:center; color:var(--muted); font-size:0.8rem; margin-bottom:10px;">— oder —</div>
+
+      <div class="form-group" style="margin-bottom:18px;">
+        <label>📝 Eigener Text</label>
+        <input type="text" name="freitext" id="slot-freitext" placeholder="z.B. Pizza bestellen, Reste…"
+               oninput="if(this.value){document.getElementById('slot-rezept').value='';}">
+      </div>
+
+      <div style="display:flex; gap:10px;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">💾 Speichern</button>
+        <button type="button" class="btn btn-ghost" onclick="slotSchliessen()">Abbrechen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function slotOeffnen(datum, mahlzeit, label, rezeptId, freitext) {
+  document.getElementById('slot-datum').value = datum;
+  document.getElementById('slot-mahlzeit').value = mahlzeit;
+  document.getElementById('slot-titel').textContent = label;
+  document.getElementById('slot-rezept').value = rezeptId ? String(rezeptId) : '';
+  document.getElementById('slot-freitext').value = freitext || '';
+  var modal = document.getElementById('slot-modal');
+  modal.style.display = 'flex';
+}
+function slotSchliessen() {
+  document.getElementById('slot-modal').style.display = 'none';
+}
+// Klick auf Hintergrund schließt Modal
+document.getElementById('slot-modal').addEventListener('click', function(e) {
+  if (e.target === this) slotSchliessen();
+});
+</script>
+
+{% endblock %}

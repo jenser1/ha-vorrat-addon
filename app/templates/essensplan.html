@@ -28,7 +28,7 @@
     <form method="post" action="{{ url_for('essensplan_sync') }}" style="display:inline;">
       <input type="hidden" name="woche" value="{{ woche }}">
       <button type="submit" class="btn btn-sm btn-primary"
-              title="Diese Woche in den HA-Kalender schreiben">📅 In HA-Kalender übertragen</button>
+              title="Ganze Woche neu in den HA-Kalender schreiben">🔄 Woche neu übertragen</button>
     </form>
     {% else %}
     <a href="{{ url_for('einstellungen') }}" class="btn btn-sm btn-ghost"
@@ -91,6 +91,8 @@
 
 <p style="color:var(--muted); font-size:0.8rem; margin-top:16px;">
   💡 Tipp: Tippe auf eine Mahlzeit, um ein Rezept oder einen eigenen Text einzutragen.
+  {% if kalender_aktiv %}<br>Änderungen werden automatisch mit dem HA-Kalender abgeglichen –
+  löschst du dort eine Mahlzeit, verschwindet sie beim nächsten Öffnen auch hier.{% endif %}
 </p>
 
 <!-- Modal -->

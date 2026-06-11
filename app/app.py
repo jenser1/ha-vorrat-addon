@@ -89,6 +89,7 @@ class Essensplan(db.Model):
     rezept_id = db.Column(db.Integer, db.ForeignKey("rezept.id", ondelete="SET NULL"), nullable=True)
     freitext = db.Column(db.String(200), default="")
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
+    cal_synced_at = db.Column(db.DateTime, nullable=True)  # zuletzt in HA-Kalender geschrieben
     rezept = db.relationship("Rezept", lazy=True)
     __table_args__ = (db.UniqueConstraint("datum", "mahlzeit", name="uq_essensplan_slot"),)
 
@@ -1577,6 +1578,14 @@ def essensplan():
     montag = heute - timedelta(days=heute.weekday()) + timedelta(weeks=woche)
     tage = [montag + timedelta(days=i) for i in range(7)]
 
+    # Zwei-Wege-Sync: im Kalender gelöschte Mahlzeiten aus dem Plan entfernen
+    ent = (get_settings().kalender_entity or "").strip()
+    if ent:
+        try:
+            kalender_reconcile(ent, tage[0], tage[-1])
+        except Exception as ex:
+            print(f"Reconcile Fehler: {ex}", flush=True)
+
     # Geplante Einträge der Woche laden → dict[(datum, mahlzeit)] = Eintrag
     eintraege = Essensplan.query.filter(
         Essensplan.datum >= tage[0],
@@ -1586,7 +1595,7 @@ def essensplan():
 
     rezepte_liste = Rezept.query.order_by(Rezept.name).all()
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
-    kalender_aktiv = bool((get_settings().kalender_entity or "").strip())
+    kalender_aktiv = bool(ent)
 
     return render_template("essensplan.html",
         tage=tage, mahlzeiten=MAHLZEITEN, plan=plan,
@@ -1618,10 +1627,13 @@ def essensplan_setzen():
             rezept_id = None
 
     eintrag = Essensplan.query.filter_by(datum=datum, mahlzeit=mahlzeit).first()
+    ent = (get_settings().kalender_entity or "").strip()
 
-    # Leer → vorhandenen Eintrag löschen
+    # Leer → vorhandenen Eintrag löschen (auch im Kalender)
     if not rezept_id and not freitext:
         if eintrag:
+            if ent:
+                kalender_eintrag_loeschen(ent, eintrag.datum, eintrag.id)
             db.session.delete(eintrag)
             db.session.commit()
         return redirect(url_for("essensplan", woche=woche))
@@ -1634,12 +1646,21 @@ def essensplan_setzen():
             rezept_id=rezept_id, freitext=freitext if not rezept_id else "")
         db.session.add(eintrag)
     db.session.commit()
+
+    # Auto-Sync in den HA-Kalender (sofort)
+    if ent:
+        if kalender_eintrag_schreiben(ent, eintrag):
+            eintrag.cal_synced_at = datetime.utcnow()
+            db.session.commit()
     return redirect(url_for("essensplan", woche=woche))
 
 @app.route("/essensplan/<int:id>/loeschen", methods=["POST"])
 def essensplan_loeschen(id):
     woche = request.form.get("woche", "0")
     eintrag = Essensplan.query.get_or_404(id)
+    ent = (get_settings().kalender_entity or "").strip()
+    if ent:
+        kalender_eintrag_loeschen(ent, eintrag.datum, eintrag.id)
     db.session.delete(eintrag)
     db.session.commit()
     return redirect(url_for("essensplan", woche=woche))
@@ -1668,43 +1689,36 @@ def essensplan_sync():
     montag = heute - timedelta(days=heute.weekday()) + timedelta(weeks=woche_i)
     sonntag = montag + timedelta(days=6)
 
-    # 1. Alte, vom Add-on erstellte Einträge dieser Woche löschen
-    geloescht = 0
+    # 1. Alle vom Add-on erstellten Einträge der Woche löschen (auch Waisen)
     try:
         events = ha_kalender_events_holen(
             ent, montag.isoformat() + "T00:00:00",
             (sonntag + timedelta(days=1)).isoformat() + "T00:00:00")
         for e in events:
             if KAL_MARKER in (e.get("description") or ""):
-                if ha_kalender_event_loeschen(ent, e.get("uid")):
-                    geloescht += 1
+                ha_kalender_event_loeschen(ent, e.get("uid"))
     except Exception as ex:
         print(f"HA Kalender Lesen/Löschen Fehler: {ex}", flush=True)
 
-    # 2. Aktuelle Wochen-Mahlzeiten neu schreiben
+    # 2. Aktuelle Wochen-Mahlzeiten neu schreiben (mit Eintrag-Marker)
     eintraege = Essensplan.query.filter(
         Essensplan.datum >= montag, Essensplan.datum <= sonntag).all()
     erstellt = 0
     fehler = 0
     for ev in eintraege:
-        name = ev.rezept.name if ev.rezept else ev.freitext
-        if not name:
+        if not (ev.rezept or ev.freitext):
             continue
-        label = dict(MAHLZEITEN).get(ev.mahlzeit, ev.mahlzeit)
-        summary = f"{label}: {name}"
-        z1, z2 = MAHLZEIT_ZEIT.get(ev.mahlzeit, ("12:00:00", "12:30:00"))
-        start_dt = f"{ev.datum.isoformat()} {z1}"
-        end_dt = f"{ev.datum.isoformat()} {z2}"
-        if ha_kalender_event_erstellen(ent, summary, start_dt, end_dt,
-                                       f"Geplant über Vorratsverwaltung {KAL_MARKER}"):
+        if kalender_eintrag_schreiben(ent, ev):
+            ev.cal_synced_at = datetime.utcnow()
             erstellt += 1
         else:
             fehler += 1
+    db.session.commit()
 
     if fehler:
-        flash(f"HA-Kalender: {erstellt} übertragen, {geloescht} ersetzt, {fehler} fehlgeschlagen – siehe Add-on-Log.", "danger")
+        flash(f"HA-Kalender: {erstellt} übertragen, {fehler} fehlgeschlagen – siehe Add-on-Log.", "danger")
     else:
-        flash(f"✅ HA-Kalender aktualisiert: {erstellt} Mahlzeiten übertragen ({geloescht} alte ersetzt).", "success")
+        flash(f"✅ HA-Kalender aktualisiert: {erstellt} Mahlzeiten übertragen.", "success")
     return redirect(url_for("essensplan", woche=woche))
 
 # ── Einstellungen Route ────────────────────────────────────────────────────────
@@ -1730,7 +1744,7 @@ def einstellungen():
 
 # ── HA Kalender Integration ───────────────────────────────────────────────────
 
-KAL_MARKER = "[essensplan]"  # Erkennt vom Add-on erstellte Kalender-Einträge
+KAL_MARKER = "[essensplan"  # Präfix; pro Eintrag: [essensplan:ID]
 MAHLZEIT_ZEIT = {
     "fruehstueck": ("08:00:00", "08:30:00"),
     "mittag":      ("12:00:00", "12:30:00"),
@@ -1823,6 +1837,67 @@ def ha_kalender_event_loeschen(ent, uid):
         if ws:
             try: ws.close()
             except Exception: pass
+
+def kalender_eintrag_loeschen(ent, datum, entry_id):
+    """Löscht das/die Kalender-Event(s) eines bestimmten Plan-Eintrags."""
+    try:
+        events = ha_kalender_events_holen(
+            ent, datum.isoformat() + "T00:00:00",
+            (datum + timedelta(days=1)).isoformat() + "T00:00:00")
+    except Exception as e:
+        print(f"HA Kalender lesen Fehler: {e}", flush=True)
+        return 0
+    marker = f"[essensplan:{entry_id}]"
+    n = 0
+    for e in events:
+        if marker in (e.get("description") or ""):
+            if ha_kalender_event_loeschen(ent, e.get("uid")):
+                n += 1
+    return n
+
+def kalender_eintrag_schreiben(ent, ev):
+    """Upsert: altes Event dieses Eintrags löschen, dann neu erstellen.
+    Gibt True bei Erfolg zurück (Aufrufer setzt dann cal_synced_at)."""
+    name = ev.rezept.name if ev.rezept else ev.freitext
+    if not name:
+        return False
+    kalender_eintrag_loeschen(ent, ev.datum, ev.id)
+    label = dict(MAHLZEITEN).get(ev.mahlzeit, ev.mahlzeit)
+    z1, z2 = MAHLZEIT_ZEIT.get(ev.mahlzeit, ("12:00:00", "12:30:00"))
+    return ha_kalender_event_erstellen(
+        ent, f"{label}: {name}",
+        f"{ev.datum.isoformat()} {z1}", f"{ev.datum.isoformat()} {z2}",
+        f"Geplant über Vorratsverwaltung [essensplan:{ev.id}]")
+
+def kalender_reconcile(ent, von, bis):
+    """Zwei-Wege: im HA-Kalender gelöschte Mahlzeiten auch aus dem Plan entfernen.
+    Nur Einträge berücksichtigen, die >90s synchronisiert sind (Schutz vor HA-Verzögerung)."""
+    if not os.environ.get("SUPERVISOR_TOKEN", ""):
+        return 0
+    try:
+        events = ha_kalender_events_holen(
+            ent, von.isoformat() + "T00:00:00",
+            (bis + timedelta(days=1)).isoformat() + "T00:00:00")
+    except Exception as e:
+        print(f"HA Kalender Reconcile lesen Fehler: {e}", flush=True)
+        return 0  # Kalender nicht erreichbar → nichts löschen
+    vorhanden = set()
+    for e in events:
+        for m in re.findall(r"\[essensplan:(\d+)\]", e.get("description") or ""):
+            vorhanden.add(int(m))
+    grenze = datetime.utcnow() - timedelta(seconds=90)
+    kandidaten = Essensplan.query.filter(
+        Essensplan.datum >= von, Essensplan.datum <= bis,
+        Essensplan.cal_synced_at.isnot(None)).all()
+    geloescht = 0
+    for ev in kandidaten:
+        if ev.cal_synced_at and ev.cal_synced_at < grenze and ev.id not in vorhanden:
+            db.session.delete(ev)
+            geloescht += 1
+    if geloescht:
+        db.session.commit()
+        print(f"Reconcile: {geloescht} im Kalender gelöschte Mahlzeiten aus Plan entfernt.", flush=True)
+    return geloescht
 
 # ── HA Sensor Integration ─────────────────────────────────────────────────────
 
@@ -2021,8 +2096,12 @@ def db_migrieren():
                 rezept_id INTEGER,
                 freitext VARCHAR(200) DEFAULT '',
                 erstellt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                cal_synced_at DATETIME,
                 UNIQUE(datum, mahlzeit)
             )""")
+            conn.commit()
+        if tabelle_existiert("essensplan") and not spalte_existiert("essensplan", "cal_synced_at"):
+            cur.execute("ALTER TABLE essensplan ADD COLUMN cal_synced_at DATETIME")
             conn.commit()
 
         conn.close()

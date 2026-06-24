@@ -32,6 +32,8 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 ### 📅 Essensplaner
 - Wochenansicht mit **Frühstück / Mittag / Abend**
 - Pro Mahlzeit: vorhandenes Rezept **oder** eigener Freitext
+- **Personenzahl** pro Mahlzeit + fehlende Zutaten direkt zur Einkaufsliste
+- **„Zum Essensplan"** direkt von jeder Rezeptseite
 - **Anbindung an den Home-Assistant-Kalender** (Zwei-Wege-Sync)
 - Im HA-Kalender gelöschte Mahlzeiten verschwinden auch aus dem Planer
 
@@ -108,6 +110,12 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.5.7
+- 👥 **Personenzahl** pro geplanter Mahlzeit (automatisch aus den Rezept-Portionen)
+- 🛒 Im Essensplaner direkt **fehlende Zutaten zur Einkaufsliste** hinzufügen
+  – Menge auf die Personenzahl umgerechnet, Auswahl welche Liste
+- 📅 **„Zum Essensplan"-Button** auf jeder Rezeptseite (Datum/Mahlzeit/Personen)
 
 ### 1.5.6
 - 📅 **Essensplaner** – Wochenansicht mit Frühstück / Mittag / Abend

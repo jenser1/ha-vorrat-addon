@@ -63,9 +63,10 @@
         {% if eintrag %}
           <div style="display:flex; align-items:center; gap:4px; background:var(--border);
                border-radius:7px; padding:6px 8px; cursor:pointer;"
-               onclick='slotOeffnen({{ tag.isoformat() | tojson }}, {{ m_key | tojson }}, {{ (tag_name ~ " · " ~ m_label) | tojson }}, {{ eintrag.rezept_id or 0 }}, {{ eintrag.freitext | tojson }})'>
+               onclick='slotOeffnen({{ tag.isoformat() | tojson }}, {{ m_key | tojson }}, {{ (tag_name ~ " · " ~ m_label) | tojson }}, {{ eintrag.rezept_id or 0 }}, {{ eintrag.freitext | tojson }}, {{ eintrag.personen or 0 }})'>
             <span style="flex:1; font-size:0.82rem; line-height:1.25; overflow:hidden;">
               {% if eintrag.rezept %}🍽️ {{ eintrag.rezept.name }}{% else %}📝 {{ eintrag.freitext }}{% endif %}
+              {% if eintrag.personen %}<span style="color:var(--muted); font-size:0.72rem;">· {{ eintrag.personen }}👤</span>{% endif %}
             </span>
             <form method="post" action="{{ url_for('essensplan_loeschen', id=eintrag.id) }}"
                   onclick="event.stopPropagation();" style="display:inline;">
@@ -76,7 +77,7 @@
           </div>
         {% else %}
           <button type="button"
-                  onclick='slotOeffnen({{ tag.isoformat() | tojson }}, {{ m_key | tojson }}, {{ (tag_name ~ " · " ~ m_label) | tojson }}, 0, "")'
+                  onclick='slotOeffnen({{ tag.isoformat() | tojson }}, {{ m_key | tojson }}, {{ (tag_name ~ " · " ~ m_label) | tojson }}, 0, "", 0)'
                   style="width:100%; text-align:left; background:none; border:1px dashed var(--border);
                          border-radius:7px; padding:6px 8px; cursor:pointer; color:var(--muted); font-size:0.8rem;">
             + hinzufügen
@@ -107,7 +108,7 @@
 
       <div class="form-group" style="margin-bottom:14px;">
         <label>🍽️ Rezept auswählen</label>
-        <select name="rezept_id" id="slot-rezept" onchange="if(this.value){document.getElementById('slot-freitext').value='';}">
+        <select name="rezept_id" id="slot-rezept" onchange="rezeptGewaehlt()">
           <option value="">— kein Rezept —</option>
           {% for r in rezepte %}
           <option value="{{ r.id }}">{{ r.name }}</option>
@@ -117,10 +118,40 @@
 
       <div style="text-align:center; color:var(--muted); font-size:0.8rem; margin-bottom:10px;">— oder —</div>
 
-      <div class="form-group" style="margin-bottom:18px;">
+      <div class="form-group" style="margin-bottom:14px;">
         <label>📝 Eigener Text</label>
         <input type="text" name="freitext" id="slot-freitext" placeholder="z.B. Pizza bestellen, Reste…"
-               oninput="if(this.value){document.getElementById('slot-rezept').value='';}">
+               oninput="if(this.value){document.getElementById('slot-rezept').value=''; rezeptGewaehlt();}">
+      </div>
+
+      <div class="form-group" style="margin-bottom:14px;">
+        <label>👥 Für wie viele Personen?</label>
+        <input type="number" name="personen" id="slot-personen" min="1" step="1" placeholder="z.B. 4">
+      </div>
+
+      <!-- Einkaufsliste (nur bei Rezept) -->
+      <div id="slot-einkauf" style="display:none; background:var(--border); border-radius:10px; padding:12px; margin-bottom:18px;">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom:10px;">
+          <input type="checkbox" name="zur_einkaufsliste" value="1" id="slot-zur-einkauf"
+                 style="width:auto;" onchange="document.getElementById('slot-liste-wrap').style.display = this.checked ? 'block' : 'none';">
+          <span style="font-size:0.88rem; font-weight:600;">🛒 Fehlende Zutaten zur Einkaufsliste</span>
+        </label>
+        <div id="slot-liste-wrap" style="display:none;">
+          {% if einkaufslisten %}
+          <select name="einkauf_liste_id" style="width:100%;">
+            {% for l in einkaufslisten %}
+            <option value="{{ l.id }}">{{ l.name }}</option>
+            {% endfor %}
+          </select>
+          <div style="font-size:0.74rem; color:var(--muted); margin-top:6px;">
+            Menge wird auf die gewählte Personenzahl umgerechnet; nur fehlende Zutaten (nicht im Vorrat).
+          </div>
+          {% else %}
+          <div style="font-size:0.78rem; color:var(--muted);">
+            Noch keine Einkaufsliste vorhanden – lege zuerst unter „Einkauf" eine an.
+          </div>
+          {% endif %}
+        </div>
       </div>
 
       <div style="display:flex; gap:10px;">
@@ -132,12 +163,35 @@
 </div>
 
 <script>
-function slotOeffnen(datum, mahlzeit, label, rezeptId, freitext) {
+var rezeptPortionen = {{ rezept_portionen | tojson }};
+
+function rezeptGewaehlt() {
+  var rezeptId = document.getElementById('slot-rezept').value;
+  var einkauf = document.getElementById('slot-einkauf');
+  var personen = document.getElementById('slot-personen');
+  if (rezeptId) {
+    einkauf.style.display = 'block';
+    // Personen mit Rezept-Portionen vorbelegen, falls leer
+    if (!personen.value && rezeptPortionen[rezeptId]) {
+      personen.value = rezeptPortionen[rezeptId];
+    }
+  } else {
+    einkauf.style.display = 'none';
+    document.getElementById('slot-zur-einkauf').checked = false;
+    document.getElementById('slot-liste-wrap').style.display = 'none';
+  }
+}
+
+function slotOeffnen(datum, mahlzeit, label, rezeptId, freitext, personen) {
   document.getElementById('slot-datum').value = datum;
   document.getElementById('slot-mahlzeit').value = mahlzeit;
   document.getElementById('slot-titel').textContent = label;
   document.getElementById('slot-rezept').value = rezeptId ? String(rezeptId) : '';
   document.getElementById('slot-freitext').value = freitext || '';
+  document.getElementById('slot-personen').value = personen ? String(personen) : '';
+  document.getElementById('slot-zur-einkauf').checked = false;
+  document.getElementById('slot-liste-wrap').style.display = 'none';
+  rezeptGewaehlt();
   var modal = document.getElementById('slot-modal');
   modal.style.display = 'flex';
 }

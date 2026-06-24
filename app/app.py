@@ -88,6 +88,7 @@ class Essensplan(db.Model):
     mahlzeit = db.Column(db.String(20), nullable=False)  # fruehstueck, mittag, abend
     rezept_id = db.Column(db.Integer, db.ForeignKey("rezept.id", ondelete="SET NULL"), nullable=True)
     freitext = db.Column(db.String(200), default="")
+    personen = db.Column(db.Integer, nullable=True)  # geplante Personenzahl
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
     cal_synced_at = db.Column(db.DateTime, nullable=True)  # zuletzt in HA-Kalender geschrieben
     rezept = db.relationship("Rezept", lazy=True)
@@ -838,7 +839,8 @@ def rezept_detail(id):
             "vorhanden": p is not None and p.menge >= z.menge
         })
     return render_template("rezept_detail.html", rezept=r, abgleich=abgleich,
-        einkauf_count=einkauf_count, listen=listen)
+        einkauf_count=einkauf_count, listen=listen,
+        mahlzeiten=MAHLZEITEN, heute=date.today())
 
 @app.route("/rezept/<int:id>/bearbeiten", methods=["GET", "POST"])
 def rezept_bearbeiten(id):
@@ -874,11 +876,9 @@ def rezept_loeschen(id):
     flash(f"Rezept \'{name}\' wurde gelöscht.", "info")
     return redirect(url_for("rezepte"))
 
-@app.route("/rezept/<int:id>/einkaufen", methods=["POST"])
-def rezept_einkaufen(id):
-    r = Rezept.query.get_or_404(id)
-    # Erste vorhandene Liste nehmen oder neue anlegen
-    liste_id = request.form.get("liste_id")
+def rezept_zur_liste(rezept, liste_id=None, faktor=1.0):
+    """Fügt fehlende (nach faktor skalierte) Zutaten eines Rezepts zu einer Liste hinzu.
+    Gibt (anzahl_hinzugefügt, liste) zurück."""
     if liste_id:
         liste = EinkaufsListe.query.get(int(liste_id))
     else:
@@ -888,17 +888,62 @@ def rezept_einkaufen(id):
         db.session.add(liste)
         db.session.flush()
     hinzugefuegt = 0
-    for z in r.zutaten:
+    for z in rezept.zutaten:
+        benoetigt = (z.menge or 0) * faktor
         p = Produkt.query.filter(Produkt.name.ilike(f"%{z.name}%")).first()
-        if not p or p.menge < z.menge:
+        if not p or p.menge < benoetigt:
             existiert = Einkaufsliste.query.filter_by(liste_id=liste.id, name=z.name, erledigt=False).first()
             if not existiert:
-                fehlend = z.menge - (p.menge if p else 0)
-                e = Einkaufsliste(liste_id=liste.id, name=z.name, menge=max(0, fehlend), einheit=z.einheit)
+                fehlend = benoetigt - (p.menge if p else 0)
+                e = Einkaufsliste(liste_id=liste.id, name=z.name,
+                    menge=round(max(0, fehlend), 2), einheit=z.einheit)
                 db.session.add(e)
                 hinzugefuegt += 1
+    return hinzugefuegt, liste
+
+@app.route("/rezept/<int:id>/einkaufen", methods=["POST"])
+def rezept_einkaufen(id):
+    r = Rezept.query.get_or_404(id)
+    hinzugefuegt, liste = rezept_zur_liste(r, request.form.get("liste_id"))
     db.session.commit()
     flash(f"{hinzugefuegt} fehlende Zutaten zur Liste '{liste.name}' hinzugefügt.", "success")
+    return redirect(url_for("rezept_detail", id=id))
+
+@app.route("/rezept/<int:id>/zum-essensplan", methods=["POST"])
+def rezept_zum_essensplan(id):
+    r = Rezept.query.get_or_404(id)
+    try:
+        datum = datetime.strptime(request.form.get("datum", ""), "%Y-%m-%d").date()
+    except ValueError:
+        flash("Ungültiges Datum.", "danger")
+        return redirect(url_for("rezept_detail", id=id))
+    mahlzeit = request.form.get("mahlzeit", "")
+    if mahlzeit not in dict(MAHLZEITEN):
+        flash("Ungültige Mahlzeit.", "danger")
+        return redirect(url_for("rezept_detail", id=id))
+    try:
+        personen = int(request.form.get("personen", "") or 0) or None
+    except ValueError:
+        personen = None
+
+    eintrag = Essensplan.query.filter_by(datum=datum, mahlzeit=mahlzeit).first()
+    if eintrag:
+        eintrag.rezept_id = r.id
+        eintrag.freitext = ""
+        eintrag.personen = personen
+    else:
+        eintrag = Essensplan(datum=datum, mahlzeit=mahlzeit, rezept_id=r.id, personen=personen)
+        db.session.add(eintrag)
+    db.session.commit()
+
+    # Auto-Sync in den HA-Kalender
+    ent = (get_settings().kalender_entity or "").strip()
+    if ent and kalender_eintrag_schreiben(ent, eintrag):
+        eintrag.cal_synced_at = datetime.utcnow()
+        db.session.commit()
+
+    label = dict(MAHLZEITEN).get(mahlzeit, mahlzeit)
+    flash(f"'{r.name}' für {datum.strftime('%d.%m.%Y')} ({label}) eingeplant.", "success")
     return redirect(url_for("rezept_detail", id=id))
 
 @app.route("/rezept/pdf-import", methods=["GET", "POST"])
@@ -1594,6 +1639,8 @@ def essensplan():
     plan = {f"{e.datum.isoformat()}|{e.mahlzeit}": e for e in eintraege}
 
     rezepte_liste = Rezept.query.order_by(Rezept.name).all()
+    einkaufslisten = EinkaufsListe.query.order_by(EinkaufsListe.erstellt).all()
+    rezept_portionen = {r.id: (r.portionen or 1) for r in rezepte_liste}
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     kalender_aktiv = bool(ent)
 
@@ -1602,6 +1649,7 @@ def essensplan():
         rezepte=rezepte_liste, woche=woche, heute=heute,
         montag=montag, sonntag=tage[-1],
         kalender_aktiv=kalender_aktiv,
+        einkaufslisten=einkaufslisten, rezept_portionen=rezept_portionen,
         einkauf_count=einkauf_count)
 
 @app.route("/essensplan/setzen", methods=["POST"])
@@ -1626,6 +1674,11 @@ def essensplan_setzen():
         except ValueError:
             rezept_id = None
 
+    try:
+        personen = int(request.form.get("personen", "") or 0) or None
+    except ValueError:
+        personen = None
+
     eintrag = Essensplan.query.filter_by(datum=datum, mahlzeit=mahlzeit).first()
     ent = (get_settings().kalender_entity or "").strip()
 
@@ -1641,11 +1694,23 @@ def essensplan_setzen():
     if eintrag:
         eintrag.rezept_id = rezept_id
         eintrag.freitext = freitext if not rezept_id else ""
+        eintrag.personen = personen
     else:
         eintrag = Essensplan(datum=datum, mahlzeit=mahlzeit,
-            rezept_id=rezept_id, freitext=freitext if not rezept_id else "")
+            rezept_id=rezept_id, freitext=freitext if not rezept_id else "",
+            personen=personen)
         db.session.add(eintrag)
     db.session.commit()
+
+    # Optional: Zutaten zur Einkaufsliste (nur bei Rezept)
+    if request.form.get("zur_einkaufsliste") and rezept_id:
+        rezept = Rezept.query.get(rezept_id)
+        if rezept:
+            basis = rezept.portionen or 1
+            faktor = (personen / basis) if (personen and basis) else 1.0
+            anzahl, liste = rezept_zur_liste(rezept, request.form.get("einkauf_liste_id"), faktor)
+            db.session.commit()
+            flash(f"{anzahl} fehlende Zutaten von '{rezept.name}' zur Liste '{liste.name}' hinzugefügt.", "success")
 
     # Auto-Sync in den HA-Kalender (sofort)
     if ent:
@@ -2102,6 +2167,9 @@ def db_migrieren():
             conn.commit()
         if tabelle_existiert("essensplan") and not spalte_existiert("essensplan", "cal_synced_at"):
             cur.execute("ALTER TABLE essensplan ADD COLUMN cal_synced_at DATETIME")
+            conn.commit()
+        if tabelle_existiert("essensplan") and not spalte_existiert("essensplan", "personen"):
+            cur.execute("ALTER TABLE essensplan ADD COLUMN personen INTEGER")
             conn.commit()
 
         conn.close()

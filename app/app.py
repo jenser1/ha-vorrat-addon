@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, g
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
-import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time
+import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal
 from bs4 import BeautifulSoup
 from translations import TRANSLATIONS, CURRENCIES, LANGUAGES, get_translation, format_currency
 
@@ -1832,7 +1832,7 @@ def ha_kalender_liste():
     if not api:
         return []
     try:
-        r = requests.get(f"{api}/states", headers=hdr, timeout=10)
+        r = requests.get(f"{api}/states", headers=hdr, timeout=(3, 7))
         r.raise_for_status()
         return sorted([
             {"entity_id": s["entity_id"],
@@ -1849,7 +1849,7 @@ def ha_kalender_events_holen(ent, start_iso, end_iso):
     if not api:
         return []
     r = requests.get(f"{api}/calendars/{ent}", headers=hdr,
-                     params={"start": start_iso, "end": end_iso}, timeout=10)
+                     params={"start": start_iso, "end": end_iso}, timeout=(3, 7))
     r.raise_for_status()
     return r.json()
 
@@ -1862,7 +1862,7 @@ def ha_kalender_event_erstellen(ent, summary, start_dt, end_dt, description):
         r = requests.post(f"{api}/services/calendar/create_event", headers=hdr,
             json={"entity_id": ent, "summary": summary,
                   "start_date_time": start_dt, "end_date_time": end_dt,
-                  "description": description}, timeout=10)
+                  "description": description}, timeout=(3, 7))
         r.raise_for_status()
         return True
     except Exception as e:
@@ -1881,7 +1881,7 @@ def ha_kalender_event_loeschen(ent, uid):
         return False
     ws = None
     try:
-        ws = websocket.create_connection("ws://supervisor/core/websocket", timeout=10)
+        ws = websocket.create_connection("ws://supervisor/core/websocket", timeout=7)
         first = json.loads(ws.recv())
         if first.get("type") == "auth_required":
             ws.send(json.dumps({"type": "auth", "access_token": token}))
@@ -1939,6 +1939,16 @@ def kalender_reconcile(ent, von, bis):
     Nur Einträge berücksichtigen, die >90s synchronisiert sind (Schutz vor HA-Verzögerung)."""
     if not os.environ.get("SUPERVISOR_TOKEN", ""):
         return 0
+
+    grenze = datetime.utcnow() - timedelta(seconds=90)
+    kandidaten = Essensplan.query.filter(
+        Essensplan.datum >= von, Essensplan.datum <= bis,
+        Essensplan.cal_synced_at.isnot(None),
+        Essensplan.cal_synced_at < grenze).all()
+    # Nichts synchronisiert in dieser Woche → kein Kalender-Aufruf nötig (schneller Seitenaufruf)
+    if not kandidaten:
+        return 0
+
     try:
         events = ha_kalender_events_holen(
             ent, von.isoformat() + "T00:00:00",
@@ -1950,13 +1960,9 @@ def kalender_reconcile(ent, von, bis):
     for e in events:
         for m in re.findall(r"\[essensplan:(\d+)\]", e.get("description") or ""):
             vorhanden.add(int(m))
-    grenze = datetime.utcnow() - timedelta(seconds=90)
-    kandidaten = Essensplan.query.filter(
-        Essensplan.datum >= von, Essensplan.datum <= bis,
-        Essensplan.cal_synced_at.isnot(None)).all()
     geloescht = 0
     for ev in kandidaten:
-        if ev.cal_synced_at and ev.cal_synced_at < grenze and ev.id not in vorhanden:
+        if ev.id not in vorhanden:
             db.session.delete(ev)
             geloescht += 1
     if geloescht:
@@ -2174,9 +2180,21 @@ def db_migrieren():
 
         conn.close()
 
+def _sauber_beenden(signum, frame):
+    """SIGTERM sauber abfangen → Exit-Code 0 (sonst meldet der Supervisor 143)."""
+    print("SIGTERM empfangen – Vorratsverwaltung beendet sauber.", flush=True)
+    os._exit(0)
+
 if __name__ == "__main__":
+    print(">>> Vorratsverwaltung START – Build v1.5.8 (SIGTERM-Handler + threaded aktiv) <<<", flush=True)
+    # Als PID 1 im Container: SIGTERM/SIGINT abfangen für sauberen Stop/Neustart
+    signal.signal(signal.SIGTERM, _sauber_beenden)
+    signal.signal(signal.SIGINT, _sauber_beenden)
+
     db_migrieren()
     with app.app_context():
         db.engine.dispose()
     ha_sensoren_aktualisieren()
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    # threaded=True: mehrere Anfragen gleichzeitig – sonst blockiert ein langsamer
+    # Request (z.B. HA-Kalender-Aufruf) das ganze Add-on → 503 bei anderen Seiten
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)

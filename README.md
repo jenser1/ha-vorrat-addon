@@ -111,6 +111,13 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
+### 1.5.8
+- 🩹 Stabilität: Server verarbeitet mehrere Anfragen gleichzeitig (`threaded`)
+  – ein langsamer Kalender-Aufruf legt nicht mehr das ganze Add-on lahm (503-Fix)
+- 🩹 SIGTERM wird sauber abgefangen → sauberer Stop/Neustart (kein Exit-Code 143)
+- ⚡ Essensplaner lädt deutlich schneller: Kalender-Abgleich nur noch, wenn nötig
+- ⏱️ Kürzere Timeouts für HA-Kalender-Aufrufe (schnelles Scheitern bei Netzproblemen)
+
 ### 1.5.7
 - 👥 **Personenzahl** pro geplanter Mahlzeit (automatisch aus den Rezept-Portionen)
 - 🛒 Im Essensplaner direkt **fehlende Zutaten zur Einkaufsliste** hinzufügen

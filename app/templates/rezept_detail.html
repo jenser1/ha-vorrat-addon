@@ -67,23 +67,25 @@
         </div>
       {% endif %}
 
-      <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="display: flex; flex-direction: column; gap: 7px;">
         {% for a in abgleich %}
-        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
-             background: {{ '#f0fdf4' if a.vorhanden else '#fff7ed' }};">
-          <span style="font-size: 1rem;">{{ '✅' if a.vorhanden else '❌' }}</span>
-          <div style="flex: 1;">
-            <span style="font-weight: 500;">{{ a.zutat.name }}</span>
-            <span style="color: var(--muted); font-size: 0.82rem; margin-left: 6px;">
-              {{ a.zutat.menge|int if a.zutat.menge == a.zutat.menge|int else a.zutat.menge }}
-              {{ a.zutat.einheit }}
-            </span>
+        {% set statusfarbe = 'var(--success)' if a.vorhanden else ('var(--warning)' if a.vorrat else 'var(--danger)') %}
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px;
+             background: var(--bg); border-left: 4px solid {{ statusfarbe }};">
+          <span style="font-size: 0.95rem; line-height: 1;">{{ '✅' if a.vorhanden else ('⚠️' if a.vorrat else '🛒') }}</span>
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-weight: 600; color: var(--text); font-size: 0.9rem;">{{ a.zutat.name }}</div>
+            <div style="font-size: 0.78rem; color: var(--muted);">
+              <span>benötigt: {{ a.zutat.menge|int if a.zutat.menge == a.zutat.menge|int else a.zutat.menge }} {{ a.zutat.einheit }}</span>
+              {% if a.vorhanden %}
+                · <span style="color: var(--success); font-weight: 600;">im Vorrat ✓</span>
+              {% elif a.vorrat %}
+                · <span style="color: var(--warning); font-weight: 600;">nur {{ a.vorrat.menge|int if a.vorrat.menge == a.vorrat.menge|int else a.vorrat.menge }} {{ a.vorrat.einheit }} da</span>
+              {% else %}
+                · <span style="color: var(--danger); font-weight: 600;">fehlt</span>
+              {% endif %}
+            </div>
           </div>
-          {% if a.vorrat %}
-            <span style="font-size: 0.78rem; color: var(--muted);">
-              ({{ a.vorrat.menge|int if a.vorrat.menge == a.vorrat.menge|int else a.vorrat.menge }} {{ a.vorrat.einheit }} vorhanden)
-            </span>
-          {% endif %}
         </div>
         {% endfor %}
       </div>

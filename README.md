@@ -111,6 +111,17 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
+### 1.5.9
+- 🔍 **Live-Suche** in der Übersicht (filtert Produkte sofort beim Tippen)
+- ↕️ **Sortierung** nach Name, MHD (Ablaufdatum) oder Menge – bleibt erhalten
+- 🗂️ **Verwaltung** in den Einstellungen: Lagerorte, Kategorien & Einheiten
+  umbenennen (führt Dubletten zusammen), löschen (nur ungenutzte) und neu anlegen
+- 📍 Produktformular schlägt vorhandene Lagerorte/Kategorien/Einheiten vor (keine Tippfehler)
+- 🎨 Status als farbiger **Balken links** (statt kompletter Umrandung) – einheitlich mit Rezepten
+- 🎨 Gebinde-Stepper sauber ausgerichtet, alle +/- Buttons in gleicher Form
+- 🌙 Dark-Mode: Hinweis-Boxen, Kategorie-Tags und Stepper-Symbole überarbeitet (lesbar)
+- 📱 Mobile: größere Touch-Flächen, volle Suchfeld-Breite, kompaktere Verwaltung
+
 ### 1.5.8
 - 🩹 Stabilität: Server verarbeitet mehrere Anfragen gleichzeitig (`threaded`)
   – ein langsamer Kalender-Aufruf legt nicht mehr das ganze Add-on lahm (503-Fix)

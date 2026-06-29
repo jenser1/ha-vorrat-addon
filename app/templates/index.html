@@ -24,11 +24,11 @@
       "infos   infos";
     grid-template-columns: 1fr auto;
     gap: 0;
-    border-radius: 12px;
+    border-radius: 10px;
     border: 1px solid var(--border);
+    border-left: 4px solid var(--statusfarbe, var(--border));
     margin-bottom: 10px;
     padding: 10px 12px;
-    outline-offset: -1px !important;
   }
   .table-wrap tr:last-child td { border-bottom: none; }
 
@@ -43,18 +43,45 @@
 
   /* Desktop: td-infos als normale Zelle */
 
-  /* Stepper kompakter auf Mobile */
-  .stepper button { width: 40px; height: 40px; font-size: 1.2rem; }
+  /* Stepper auf Mobile: gleiche Größe wie Gebinde-Buttons (Touch-Ziele) */
+  .stepper button { width: 44px; height: 44px; font-size: 1.3rem; }
   .stepper .menge-wert { font-size: 1rem; min-width: 60px; }
 
-  /* Aktionen: kein nowrap auf Mobile */
-  .td-aktionen { white-space: normal; }
+  /* Gebinde-Buttons auf Mobile größer (Touch-Ziele) */
+  .geb-btn { width: 44px; height: 44px; font-size: 1.3rem; }
+  .geb-btn-kiste { height: 44px; font-size: 0.8rem; padding: 0 14px; }
+
+  /* Suchfeld volle Breite, Sortier-Buttons darunter */
+  #produkt-suche { flex-basis: 100%; }
+
+  /* Aktionen: kein nowrap auf Mobile, größere Touch-Buttons */
+  .td-aktionen { white-space: normal; gap: 6px; }
+  .td-aktionen .btn-sm { min-width: 38px; min-height: 38px; }
 }
 
-/* Desktop: Aktionen in einer Zeile halten */
+/* Desktop: Aktionen in einer Zeile halten + farbiger Status-Balken links.
+   Balken als absolut positioniertes ::before → fester Platz, verschiebt nichts;
+   ALLE Produktnamen stehen exakt gleich eingerückt (gerade untereinander). */
 @media (min-width: 641px) {
   .td-aktionen { white-space: nowrap; }
+  .table-wrap td.td-name { position: relative; padding-left: 18px; }
+  .table-wrap td.td-name::before {
+    content: "";
+    position: absolute; left: 0; top: 6px; bottom: 6px;
+    width: 4px; border-radius: 0 3px 3px 0;
+    background: var(--statusfarbe, transparent);
+  }
 }
+
+/* Gebinde-Stepper: alle Buttons gleiche Form (Höhe/Rundung/Rand),
+   nur die Farbe unterscheidet sich – neutral/weiß bzw. gelb */
+.geb-btn, .geb-btn-kiste {
+  height: 36px; border-radius: 8px; border: 1.5px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; touch-action: manipulation; line-height: 1;
+}
+.geb-btn        { width: 36px; background: #ffffff; color: #1f2937; font-size: 1.1rem; }
+.geb-btn-kiste  { padding: 0 12px; background: #fef3c7; border-color: #f59e0b; color: #92400e; font-size: 0.74rem; white-space: nowrap; }
 </style>
 
 <!-- Stats -->
@@ -109,6 +136,18 @@
       {% else %}Alle Produkte{% endif %}
     </span>
 
+    <!-- Suche + Sortierung -->
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; width:100%;">
+      <input type="text" id="produkt-suche" placeholder="🔍 Produkt suchen…" oninput="produktSuche()"
+             style="flex:1; min-width:170px; padding:8px 12px; border:1px solid var(--border);
+                    border-radius:8px; background:var(--card); color:var(--text); font-size:0.9rem;">
+      <span style="font-size:0.72rem; color:var(--muted); font-weight:600; white-space:nowrap;">Sortieren:</span>
+      {% for key, label in [('standard','Standard'), ('name','🔤 Name'), ('mhd','📅 MHD'), ('menge','🔢 Menge')] %}
+        <a href="{{ url_for('index', kategorie=kat_filter or none, lagerort=ort_filter or none, sort=key) }}"
+           class="btn btn-sm {% if sort == key %}btn-primary{% else %}btn-ghost{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+
     <!-- Kategorie-Chips -->
     <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
       <span style="font-size:0.72rem; color:var(--muted); font-weight:600; white-space:nowrap;">Kategorie:</span>
@@ -151,67 +190,49 @@
       </thead>
       <tbody>
         {% for p in produkte %}
-        <tr style="
-          {%- if p.mhd_status == 'abgelaufen' -%}
-            outline: 2px solid #6b7280; outline-offset: -2px; border-radius:6px;
-          {%- elif p.mhd_status == 'kritisch' -%}
-            outline: 2px solid #ef4444; outline-offset: -2px; border-radius:6px;
-          {%- elif p.mhd_status == 'warnung' -%}
-            outline: 2px solid #d97706; outline-offset: -2px; border-radius:6px;
-          {%- elif p.menge < p.mindestmenge and p.mindestmenge > 0 -%}
-            outline: 2px solid #ef4444; outline-offset: -2px; border-radius:6px;
-          {%- elif p.ist_angebrochen -%}
-            outline: 2px solid #fb923c; outline-offset: -2px; border-radius:6px;
-          {%- endif -%}
-        ">
+        {%- set statusfarbe = '' -%}
+        {%- if p.mhd_status == 'abgelaufen' -%}{%- set statusfarbe = '#6b7280' -%}
+        {%- elif p.mhd_status == 'kritisch' -%}{%- set statusfarbe = 'var(--danger)' -%}
+        {%- elif p.mhd_status == 'warnung' -%}{%- set statusfarbe = 'var(--warning)' -%}
+        {%- elif p.menge < p.mindestmenge and p.mindestmenge > 0 -%}{%- set statusfarbe = 'var(--danger)' -%}
+        {%- elif p.ist_angebrochen -%}{%- set statusfarbe = '#fb923c' -%}
+        {%- endif -%}
+        <tr{% if statusfarbe %} style="--statusfarbe: {{ statusfarbe }};"{% endif %}>
           <td class="td-name">
             <strong>{{ p.name }}</strong>
           </td>
           <td class="td-menge">
             {% if p.gebinde_wert and p.gebinde_wert > 1 %}
-            <!-- Zwei Stepper: Kiste und Einzelstück -->
-            <div style="display:flex; flex-direction:column; gap:4px;">
-              <!-- Kisten-Stepper -->
-              <div class="stepper" style="justify-content:center;">
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
-                  <input type="hidden" name="aktion" value="verringern">
-                  <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
-                  <button type="submit" title="{{ p.gebinde_wert }} {{ p.einheit }} entfernen"
-                          style="background:#fef3c7; border-color:#f59e0b; font-size:0.7rem; padding:4px 8px;">
-                    − Kiste
-                  </button>
-                </form>
-                <span style="font-size:0.72rem; color:var(--muted); min-width:55px; text-align:center;">
-                  📦 à {{ p.gebinde_wert }}
-                </span>
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
-                  <input type="hidden" name="aktion" value="erhoehen">
-                  <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
-                  <button type="submit" title="{{ p.gebinde_wert }} {{ p.einheit }} hinzufügen"
-                          style="background:#fef3c7; border-color:#f59e0b; font-size:0.7rem; padding:4px 8px;">
-                    + Kiste
-                  </button>
-                </form>
-              </div>
-              <!-- Einzel-Stepper -->
-              <div class="stepper" style="justify-content:center;">
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
-                  <input type="hidden" name="aktion" value="verringern">
-                  <input type="hidden" name="wert" value="1">
-                  <button type="submit" title="1 {{ p.einheit }} entfernen">−</button>
-                </form>
-                <span class="menge-wert" style="color:{{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
-                  {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
-                  <span style="display:block; font-size:0.68rem; color:var(--muted);">
-                    = {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten
-                  </span>
-                </span>
-                <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
-                  <input type="hidden" name="aktion" value="erhoehen">
-                  <input type="hidden" name="wert" value="1">
-                  <button type="submit" title="1 {{ p.einheit }} hinzufügen">+</button>
-                </form>
-              </div>
+            <!-- Gebinde: Kiste- und Einzel-Stepper in EINEM 3-Spalten-Raster
+                 → −/+ stehen sauber unter − Kiste/+ Kiste (nicht mehr verrutscht) -->
+            <div style="display:grid; grid-template-columns:auto 1fr auto; gap:5px 8px; align-items:center; justify-items:center;">
+              <!-- Zeile 1: Kiste -->
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="margin:0;">
+                <input type="hidden" name="aktion" value="verringern">
+                <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
+                <button type="submit" class="geb-btn-kiste" title="{{ p.gebinde_wert }} {{ p.einheit }} entfernen">− Kiste</button>
+              </form>
+              <span style="font-size:0.72rem; color:var(--muted); white-space:nowrap;">📦 à {{ p.gebinde_wert }}</span>
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="margin:0;">
+                <input type="hidden" name="aktion" value="erhoehen">
+                <input type="hidden" name="wert" value="{{ p.gebinde_wert }}">
+                <button type="submit" class="geb-btn-kiste" title="{{ p.gebinde_wert }} {{ p.einheit }} hinzufügen">+ Kiste</button>
+              </form>
+              <!-- Zeile 2: Einzeln -->
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="margin:0;">
+                <input type="hidden" name="aktion" value="verringern">
+                <input type="hidden" name="wert" value="1">
+                <button type="submit" class="geb-btn" title="1 {{ p.einheit }} entfernen">−</button>
+              </form>
+              <span class="menge-wert" style="text-align:center; color:{{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
+                {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
+                <span style="display:block; font-size:0.68rem; color:var(--muted);">= {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten</span>
+              </span>
+              <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="margin:0;">
+                <input type="hidden" name="aktion" value="erhoehen">
+                <input type="hidden" name="wert" value="1">
+                <button type="submit" class="geb-btn" title="1 {{ p.einheit }} hinzufügen">+</button>
+              </form>
             </div>
             {% else %}
             <!-- Normaler Stepper -->
@@ -266,6 +287,9 @@
         {% endfor %}
       </tbody>
     </table>
+  </div>
+  <div id="such-leer" style="display:none; text-align:center; padding:24px; color:var(--muted);">
+    Kein Produkt gefunden.
   </div>
   {% else %}
     <div style="text-align: center; padding: 40px; color: var(--muted);">
@@ -473,6 +497,23 @@ function umlagerModal(produktId, name, vonOrt, menge, einheit, kat, ort) {
 document.getElementById('umlagern-modal').addEventListener('click', function(e) {
   if (e.target === this) this.style.display = 'none';
 });
+
+// Live-Suche: Produktzeilen nach Namen filtern
+function produktSuche() {
+  var q = document.getElementById('produkt-suche').value.toLowerCase().trim();
+  var rows = document.querySelectorAll('.table-wrap tbody tr');
+  var treffer = 0;
+  rows.forEach(function(tr) {
+    var nameEl = tr.querySelector('.td-name');
+    var name = nameEl ? nameEl.textContent.toLowerCase() : '';
+    var sichtbar = name.indexOf(q) > -1;
+    tr.style.display = sichtbar ? '' : 'none';
+    if (sichtbar) treffer++;
+  });
+  var hinweis = document.getElementById('such-leer');
+  if (hinweis) hinweis.style.display = (treffer === 0 && q) ? 'block' : 'none';
+}
+
 </script>
 
 {% endblock %}

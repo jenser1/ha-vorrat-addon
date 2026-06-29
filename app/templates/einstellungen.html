@@ -143,6 +143,56 @@
     </div>
   </form>
 
+  <!-- Verwaltung: Lagerorte / Kategorien / Einheiten -->
+  <div class="card" id="verwaltung">
+    <div class="card-title" style="margin-bottom:6px;">🗂️ Verwaltung</div>
+    <p style="color:var(--muted); font-size:0.82rem; margin-bottom:8px;">
+      Lagerorte, Kategorien und Einheiten pflegen. <strong>Umbenennen</strong> korrigiert Tippfehler
+      und führt Dubletten zusammen. <strong>Löschen</strong> geht nur, wenn kein Produkt den Wert mehr nutzt.
+    </p>
+
+    {% for typ, titel, icon in [('lagerort','Lagerorte','📍'), ('kategorie','Kategorien','📂'), ('einheit','Einheiten','⚖️')] %}
+    <details style="margin-top:10px; border:1px solid var(--border); border-radius:10px; padding:10px 12px;" {{ 'open' if typ=='lagerort' }}>
+      <summary style="cursor:pointer; font-weight:600; font-size:0.9rem;">
+        {{ icon }} {{ titel }} <span style="color:var(--muted); font-weight:400;">({{ verwaltung[typ]|length }})</span>
+      </summary>
+
+      <div style="margin-top:10px;">
+        {% for e in verwaltung[typ] %}
+        <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+          <form method="post" action="{{ url_for('stammdaten_umbenennen') }}" style="display:flex; gap:6px; flex:1; align-items:center; margin:0;">
+            <input type="hidden" name="typ" value="{{ typ }}">
+            <input type="hidden" name="alt" value="{{ e.name }}">
+            <input type="text" name="neu" value="{{ e.name }}" style="flex:1; min-width:0; padding:6px 8px; font-size:0.85rem;">
+            <button type="submit" class="btn btn-ghost btn-sm" title="Umbenennen / zusammenführen">💾</button>
+          </form>
+          <span title="{{ e.anzahl }}× von Produkten genutzt"
+                style="font-size:0.72rem; color:var(--muted); white-space:nowrap; min-width:34px; text-align:right;">
+            {{ e.anzahl }}×
+          </span>
+          {% if e.anzahl == 0 %}
+          <form method="post" action="{{ url_for('stammdaten_loeschen') }}" style="display:inline; margin:0;"
+                onsubmit='return confirm({{ (e.name ~ " löschen?") | tojson }})'>
+            <input type="hidden" name="typ" value="{{ typ }}">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <button type="submit" class="btn btn-ghost btn-sm" title="Löschen (ungenutzt)">🗑️</button>
+          </form>
+          {% else %}
+          <span class="btn btn-ghost btn-sm" style="opacity:0.25; cursor:not-allowed;" title="Wird noch genutzt – nicht löschbar">🗑️</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+
+        <form method="post" action="{{ url_for('stammdaten_neu') }}" style="display:flex; gap:6px; margin-top:10px;">
+          <input type="hidden" name="typ" value="{{ typ }}">
+          <input type="text" name="name" placeholder="{{ icon }} Neu hinzufügen…" style="flex:1; padding:6px 8px; font-size:0.85rem;">
+          <button type="submit" class="btn btn-primary btn-sm">➕</button>
+        </form>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+
   <!-- Vorschau -->
   <div class="card">
     <div class="card-title" style="margin-bottom:12px;">👁️ Vorschau</div>

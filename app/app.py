@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, g
+from flask import Flask, render_template, request, redirect, url_for, flash, g, session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
 import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal
@@ -80,6 +80,13 @@ class Einstellungen(db.Model):
     theme = db.Column(db.String(20), default="light")
     farbe = db.Column(db.String(20), default="blau")
     kalender_entity = db.Column(db.String(100), default="")
+
+class Stammdaten(db.Model):
+    """Verwaltbare Listen: Lagerorte, Kategorien, Einheiten (typ + name)."""
+    id = db.Column(db.Integer, primary_key=True)
+    typ = db.Column(db.String(20), nullable=False)   # lagerort | kategorie | einheit
+    name = db.Column(db.String(100), nullable=False)
+    __table_args__ = (db.UniqueConstraint("typ", "name", name="uq_stammdaten"),)
 
 class Essensplan(db.Model):
     """Geplante Mahlzeit an einem Tag (Frühstück/Mittag/Abend)."""
@@ -363,8 +370,20 @@ def index():
     heute = date.today()
     in_7_tagen = heute + timedelta(days=7)
     produkte = Produkt.query.order_by(Produkt.kategorie, Produkt.name).all()
-    # Nullbestände ans Ende sortieren
-    produkte = sorted(produkte, key=lambda p: (p.menge <= 0, p.kategorie, p.name))
+    # Sortierung – per Session merken, damit sie bei +/-, Filter etc. erhalten bleibt
+    sort = request.args.get("sort")
+    if sort in ("standard", "name", "menge", "mhd"):
+        session["sort"] = sort
+    else:
+        sort = session.get("sort", "standard")
+    if sort == "name":
+        produkte = sorted(produkte, key=lambda p: (p.menge <= 0, p.name.lower()))
+    elif sort == "menge":
+        produkte = sorted(produkte, key=lambda p: p.menge)
+    elif sort == "mhd":
+        produkte = sorted(produkte, key=lambda p: (p.mhd is None, p.mhd or date.max, p.name.lower()))
+    else:  # standard: nach Kategorie, Nullbestände ans Ende
+        produkte = sorted(produkte, key=lambda p: (p.menge <= 0, p.kategorie, p.name))
     
     abgelaufen = [p for p in produkte if p.mhd and p.mhd < heute]
     bald_ablaufend = [p for p in produkte if p.mhd and heute <= p.mhd <= in_7_tagen]
@@ -410,12 +429,88 @@ def index():
         lagerorte=lagerorte,
         kat_filter=kat_filter,
         ort_filter=ort_filter,
+        sort=sort,
         einkauf_count=einkauf_count,
         alle_listen=alle_listen,
         heute=heute
     )
 
 # ── Routen: Produkte ───────────────────────────────────────────────────────────
+
+def vorhandene_lagerorte():
+    """Liste aller bereits verwendeten Lagerorte (für Auswahlvorschläge)."""
+    return sorted({p.lagerort for p in Produkt.query.all() if p.lagerort})
+
+# ── Stammdaten (Lagerorte / Kategorien / Einheiten) ─────────────────────────────
+
+STAMM_FELD = {"lagerort": Produkt.lagerort, "kategorie": Produkt.kategorie, "einheit": Produkt.einheit}
+
+def stammdaten_liste(typ):
+    """Sortierte Namensliste eines Typs (für Dropdowns/Datalists)."""
+    return [s.name for s in Stammdaten.query.filter_by(typ=typ).order_by(Stammdaten.name).all()]
+
+def stammdaten_sicherstellen(typ, name):
+    """Legt einen Wert an, falls er noch nicht existiert (z.B. neuer Lagerort beim Speichern)."""
+    name = (name or "").strip()
+    if name and typ in STAMM_FELD and not Stammdaten.query.filter_by(typ=typ, name=name).first():
+        db.session.add(Stammdaten(typ=typ, name=name))
+
+def stammdaten_mit_anzahl(typ):
+    """Liste {name, anzahl} – anzahl = wie viele Produkte den Wert nutzen."""
+    feld = STAMM_FELD[typ]
+    out = []
+    for s in Stammdaten.query.filter_by(typ=typ).order_by(Stammdaten.name).all():
+        out.append({"name": s.name, "anzahl": Produkt.query.filter(feld == s.name).count()})
+    return out
+
+@app.route("/stammdaten/neu", methods=["POST"])
+def stammdaten_neu():
+    typ = request.form.get("typ", "")
+    name = request.form.get("name", "").strip()
+    if typ in STAMM_FELD and name:
+        if Stammdaten.query.filter_by(typ=typ, name=name).first():
+            flash(f"'{name}' existiert bereits.", "info")
+        else:
+            db.session.add(Stammdaten(typ=typ, name=name))
+            db.session.commit()
+            flash(f"'{name}' hinzugefügt.", "success")
+    return redirect(url_for("einstellungen") + "#verwaltung")
+
+@app.route("/stammdaten/umbenennen", methods=["POST"])
+def stammdaten_umbenennen():
+    typ = request.form.get("typ", "")
+    alt = request.form.get("alt", "").strip()
+    neu = request.form.get("neu", "").strip()
+    if typ not in STAMM_FELD or not alt or not neu or alt == neu:
+        return redirect(url_for("einstellungen") + "#verwaltung")
+    feld = STAMM_FELD[typ]
+    # Produkte umstellen (führt Dubletten zusammen)
+    anzahl = Produkt.query.filter(feld == alt).update({feld.key: neu}, synchronize_session=False)
+    # Stammdaten: alten Eintrag entfernen, neuen sicherstellen
+    alt_row = Stammdaten.query.filter_by(typ=typ, name=alt).first()
+    if alt_row:
+        db.session.delete(alt_row)
+    stammdaten_sicherstellen(typ, neu)
+    db.session.commit()
+    flash(f"'{alt}' → '{neu}' ({anzahl} Produkt(e) umgestellt).", "success")
+    return redirect(url_for("einstellungen") + "#verwaltung")
+
+@app.route("/stammdaten/loeschen", methods=["POST"])
+def stammdaten_loeschen():
+    typ = request.form.get("typ", "")
+    name = request.form.get("name", "").strip()
+    if typ not in STAMM_FELD or not name:
+        return redirect(url_for("einstellungen") + "#verwaltung")
+    anzahl = Produkt.query.filter(STAMM_FELD[typ] == name).count()
+    if anzahl > 0:
+        flash(f"'{name}' wird noch von {anzahl} Produkt(en) genutzt – nicht gelöscht.", "danger")
+    else:
+        row = Stammdaten.query.filter_by(typ=typ, name=name).first()
+        if row:
+            db.session.delete(row)
+            db.session.commit()
+        flash(f"'{name}' gelöscht.", "success")
+    return redirect(url_for("einstellungen") + "#verwaltung")
 
 @app.route("/produkt/neu", methods=["GET", "POST"])
 def produkt_neu():
@@ -433,6 +528,11 @@ def produkt_neu():
         )
         db.session.add(p)
         db.session.commit()
+        # Neue Werte als Stammdaten sichern (damit sie verwaltbar sind)
+        stammdaten_sicherstellen("lagerort", p.lagerort)
+        stammdaten_sicherstellen("kategorie", p.kategorie)
+        stammdaten_sicherstellen("einheit", p.einheit)
+        db.session.commit()
         # Gebinde direkt per SQL speichern
         gebinde_val = int(request.form.get("gebinde", 0) or 0)
         if gebinde_val > 0:
@@ -441,7 +541,10 @@ def produkt_neu():
                 conn.commit()
         flash(f"'{p.name}' wurde hinzugefügt.", "success")
         return redirect(url_for("index"))
-    return render_template("produkt_form.html", produkt=None)
+    return render_template("produkt_form.html", produkt=None,
+                           lagerorte=stammdaten_liste("lagerort"),
+                           kategorien=stammdaten_liste("kategorie"),
+                           einheiten=stammdaten_liste("einheit"))
 
 @app.route("/produkt/<int:id>/bearbeiten", methods=["GET", "POST"])
 def produkt_bearbeiten(id):
@@ -455,6 +558,11 @@ def produkt_bearbeiten(id):
         p.kategorie = request.form.get("kategorie", "Sonstiges")
         mhd_str = request.form.get("mhd")
         p.mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
+        db.session.commit()
+        # Neue Werte als Stammdaten sichern
+        stammdaten_sicherstellen("lagerort", p.lagerort)
+        stammdaten_sicherstellen("kategorie", p.kategorie)
+        stammdaten_sicherstellen("einheit", p.einheit)
         db.session.commit()
         # Gebinde direkt per SQL speichern
         gebinde_val = int(request.form.get("gebinde", 0) or 0)
@@ -477,7 +585,10 @@ def produkt_bearbeiten(id):
     except:
         p.gebinde_wert = 0
     return render_template("produkt_form.html", produkt=p,
-                           zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort)
+                           zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort,
+                           lagerorte=stammdaten_liste("lagerort"),
+                           kategorien=stammdaten_liste("kategorie"),
+                           einheiten=stammdaten_liste("einheit"))
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
@@ -1804,8 +1915,13 @@ def einstellungen():
         flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("einstellungen"))
     kalender = ha_kalender_liste()
+    verwaltung = {
+        "lagerort":  stammdaten_mit_anzahl("lagerort"),
+        "kategorie": stammdaten_mit_anzahl("kategorie"),
+        "einheit":   stammdaten_mit_anzahl("einheit"),
+    }
     return render_template("einstellungen.html",
-        settings=s, einkauf_count=einkauf_count, kalender=kalender)
+        settings=s, einkauf_count=einkauf_count, kalender=kalender, verwaltung=verwaltung)
 
 # ── HA Kalender Integration ───────────────────────────────────────────────────
 
@@ -2176,6 +2292,30 @@ def db_migrieren():
             conn.commit()
         if tabelle_existiert("essensplan") and not spalte_existiert("essensplan", "personen"):
             cur.execute("ALTER TABLE essensplan ADD COLUMN personen INTEGER")
+            conn.commit()
+
+        # stammdaten (Lagerorte / Kategorien / Einheiten) – Tabelle legt db.create_all() an,
+        # hier nur befüllen, wenn noch leer (Erstmigration)
+        def _stammdaten_leer():
+            if not tabelle_existiert("stammdaten"):
+                return False
+            return cur.execute("SELECT COUNT(*) FROM stammdaten").fetchone()[0] == 0
+        if _stammdaten_leer():
+            def _add(typ, werte):
+                for w in werte:
+                    w = (w or "").strip()
+                    if w:
+                        cur.execute("INSERT OR IGNORE INTO stammdaten (typ, name) VALUES (?,?)", (typ, w))
+
+            # Werte aus vorhandenen Produkten übernehmen
+            if tabelle_existiert("produkt"):
+                _add("lagerort",  [r[0] for r in cur.execute("SELECT DISTINCT lagerort FROM produkt").fetchall()])
+                _add("kategorie", [r[0] for r in cur.execute("SELECT DISTINCT kategorie FROM produkt").fetchall()])
+                _add("einheit",   [r[0] for r in cur.execute("SELECT DISTINCT einheit FROM produkt").fetchall()])
+            # Standard-Vorgaben ergänzen
+            _add("kategorie", ['Obst & Gemüse','Milchprodukte','Fleisch & Fisch','Backwaren',
+                               'Tiefkühl','Getränke','Konserven','Gewürze','Süßes','Haushalt','Sonstiges'])
+            _add("einheit",   ['Stück','g','kg','ml','l','Packung','Dose','Flasche','Tüte'])
             conn.commit()
 
         conn.close()

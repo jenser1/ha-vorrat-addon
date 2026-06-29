@@ -26,7 +26,10 @@
       <div class="form-group">
         <label>Einheit</label>
         <select name="einheit">
-          {% set einheiten = ['Stück', 'g', 'kg', 'ml', 'l', 'Packung', 'Dose', 'Flasche', 'Tüte'] %}
+          {% set einheiten = einheiten or ['Stück', 'g', 'kg', 'ml', 'l', 'Packung', 'Dose', 'Flasche', 'Tüte'] %}
+          {% if produkt and produkt.einheit and produkt.einheit not in einheiten %}
+            <option value="{{ produkt.einheit }}" selected>{{ produkt.einheit }}</option>
+          {% endif %}
           {% for e in einheiten %}
             <option value="{{ e }}" {{ 'selected' if produkt and produkt.einheit == e }}>{{ e }}</option>
           {% endfor %}
@@ -42,13 +45,20 @@
       <div class="form-group">
         <label>Lagerort</label>
         <input type="text" name="lagerort" value="{{ produkt.lagerort if produkt else '' }}"
-          placeholder="z. B. Kühlschrank, Keller...">
+          list="lagerort-liste" autocomplete="off" placeholder="z. B. Kühlschrank, Keller...">
+        <datalist id="lagerort-liste">
+          {% for ort in lagerorte or [] %}<option value="{{ ort }}">{% endfor %}
+        </datalist>
+        <span style="font-size:0.72rem; color:var(--muted);">Tipp: vorhandenen Lagerort wählen vermeidet Tippfehler-Dubletten.</span>
       </div>
 
       <div class="form-group">
         <label>Kategorie</label>
         <select name="kategorie">
-          {% set kategorien = ['Obst & Gemüse', 'Milchprodukte', 'Fleisch & Fisch', 'Backwaren', 'Tiefkühl', 'Getränke', 'Konserven', 'Gewürze', 'Süßes', 'Haushalt', 'Sonstiges'] %}
+          {% set kategorien = kategorien or ['Obst & Gemüse', 'Milchprodukte', 'Fleisch & Fisch', 'Backwaren', 'Tiefkühl', 'Getränke', 'Konserven', 'Gewürze', 'Süßes', 'Haushalt', 'Sonstiges'] %}
+          {% if produkt and produkt.kategorie and produkt.kategorie not in kategorien %}
+            <option value="{{ produkt.kategorie }}" selected>{{ produkt.kategorie }}</option>
+          {% endif %}
           {% for k in kategorien %}
             <option value="{{ k }}" {{ 'selected' if produkt and produkt.kategorie == k }}>{{ k }}</option>
           {% endfor %}

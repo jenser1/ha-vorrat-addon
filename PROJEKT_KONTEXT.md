@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.5.9
+**Aktuelle Version:** 1.6.0
 
 ---
 
@@ -51,7 +51,10 @@ ha-vorrat-addon/
 
 ```python
 Produkt: id, name, menge, einheit, mindestmenge, lagerort,
-         kategorie, mhd, angebrochen, gebinde, erstellt
+         kategorie, mhd, angebrochen, gebinde, erstellt,
+         notiz, bild, barcode, kcal, eiweiss, fett, kohlenhydrate,
+         angebrochen_prozent
+         (angebrochen/gebinde/angebrochen_prozent: nur per Raw-SQL, nicht im ORM)
 
 EinkaufsListe: id, name, erstellt
 
@@ -107,6 +110,14 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Produktverwaltung mit MHD, Mindestmenge, Lagerort, Kategorie
 - Farbränder: rot (abgelaufen/unter Minimum), orange (Warnung/angebrochen)
 - Angebrochen-Status mit orangem Rahmen
+- Produkt-Detailseite (Klick auf Namen): Bild, Nährwerte, Notiz, "verwendet in Rezepten"
+  - Route /produkt/<id>, Speichern /produkt/<id>/detail-speichern, Bild /produkt/<id>/bild
+  - Bild-Upload nach BILDER_DIR (/share/vorratsverwaltung/bilder), send_from_directory
+  - Open Food Facts: /produkt/<id>/off-suche (Namenssuche) + /off-import (per Barcode/code)
+    openfoodfacts_suche() nutzt search.openfoodfacts.org (Fallback /cgi/search.pl)
+- Angebrochen-Balken auf der Detailseite: Füllstand-Schieberegler (angebrochen_prozent)
+  - Route /produkt/<id>/anbruch (aktion=start/stop/set); unter 15 % → menge-1, angebrochen=0
+  - farbige Füll-Div (orange, <15 % rot), Slider transparent darüber (WebKit-tauglich)
 - Gebinde-Funktion (Kisten, Pakete) mit zwei Steppern
 - Nullbestände automatisch ans Ende sortiert
 - Mehrere Einkaufslisten mit Drag & Drop

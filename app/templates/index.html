@@ -199,7 +199,11 @@
         {%- endif -%}
         <tr{% if statusfarbe %} style="--statusfarbe: {{ statusfarbe }};"{% endif %}>
           <td class="td-name">
-            <strong>{{ p.name }}</strong>
+            <a href="{{ url_for('produkt_detail', id=p.id) }}"
+               style="color:inherit; text-decoration:none;"
+               onmouseover="this.style.textDecoration='underline'"
+               onmouseout="this.style.textDecoration='none'"
+               title="Details öffnen"><strong>{{ p.name }}</strong></a>
           </td>
           <td class="td-menge">
             {% if p.gebinde_wert and p.gebinde_wert > 1 %}

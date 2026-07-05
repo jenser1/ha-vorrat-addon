@@ -15,6 +15,9 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **MHD-Warnungen** – farbcodiert (grün/gelb/rot/grau)
 - **Mindestmengen** – automatische Warnung bei Unterschreitung
 - Menge direkt per +/- Stepper anpassen
+- **Produkt-Detailseite** (Klick auf den Namen): Bild, Nährwerte, Notiz und „verwendet in Rezepten"
+- **Bild & Nährwerte** per Foto-Upload oder automatisch über **Open Food Facts** (Namenssuche)
+- **Angebrochen-Balken**: Füllstand der offenen Packung per Schieberegler – unter 15 % wird automatisch 1 abgezogen
 
 ### 🛒 Einkaufslisten
 - **Mehrere Listen** – z.B. Edeka, Aldi, Drogerie
@@ -110,6 +113,15 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.6.0
+- 🔎 **Produkt-Detailseite** – öffnet sich per Klick auf den Produktnamen in der Übersicht
+- 🖼️ **Produktbild** hochladen (auch direkt per Handy-Kamera) und **Nährwerte** (kcal, Eiweiß, Fett, KH) hinterlegen
+- 🌐 **Open Food Facts**: nach dem Produkt suchen (kein Barcode nötig) → Bild und Nährwerte automatisch übernehmen
+- 📝 **Notizfeld** pro Produkt + Übersicht „🍳 Verwendet in Rezepten"
+- 📦 **Angebrochen-Balken**: farbiger Schieberegler für den Füllstand der offenen Packung
+  (orange, unter 15 % rot) – unter 15 % wird automatisch 1 Einheit abgezogen und die Packung geschlossen
+- 🔒 Sicherheit: Flask auf 3.1.3 aktualisiert
 
 ### 1.5.9
 - 🔍 **Live-Suche** in der Übersicht (filtert Produkte sofort beim Tippen)

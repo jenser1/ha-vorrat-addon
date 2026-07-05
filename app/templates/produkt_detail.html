@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}{{ p.name }}{% endblock %}
+{% block page_title %}{{ p.name }}{% endblock %}
+
+{% block topbar_actions %}
+  <a href="{{ url_for('index') }}" class="btn btn-ghost">← Übersicht</a>
+  <a href="{{ url_for('produkt_bearbeiten', id=p.id) }}" class="btn btn-ghost" style="margin-left:6px;">✏️ Bearbeiten</a>
+  <form method="post" action="{{ url_for('produkt_loeschen', id=p.id) }}" style="display:inline; margin-left:6px;"
+        onsubmit='return confirm({{ (p.name ~ " wirklich löschen?") | tojson }})'>
+    <button type="submit" class="btn btn-ghost">🗑️ Löschen</button>
+  </form>
+{% endblock %}
+
+{% block content %}
+<div style="max-width:900px; margin:0 auto;">
+
+  <!-- Kopf: Bild + Basis-Infos + Menge -->
+  <div class="card">
+    <div style="display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start;">
+      <div style="flex:0 0 auto;">
+        {% if p.bild %}
+          <img src="{{ url_for('produkt_bild', id=p.id) }}" alt="{{ p.name }}"
+               style="width:140px; height:140px; object-fit:cover; border-radius:12px; border:1px solid var(--border);">
+        {% else %}
+          <div style="width:140px; height:140px; border-radius:12px; border:1px dashed var(--border);
+                      display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:2.6rem;">📦</div>
+        {% endif %}
+      </div>
+
+      <div style="flex:1; min-width:220px;">
+        <h2 style="font-size:1.4rem; font-weight:700; margin-bottom:8px;">{{ p.name }}</h2>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+          <span class="kat-tag">{{ p.kategorie }}</span>
+          {% if p.lagerort %}<span style="font-size:0.82rem; color:var(--muted);">📍 {{ p.lagerort }}</span>{% endif %}
+        </div>
+
+        {% if p.mhd %}
+        <div style="margin-bottom:14px;">
+          <span class="mhd-badge mhd-{{ p.status }}">{{ p.mhd.strftime('%d.%m.%Y') }}</span>
+          {% if p.tage_bis_mhd is not none %}
+            <span style="font-size:0.82rem; color:var(--muted); margin-left:6px;">
+              {% if p.tage_bis_mhd < 0 %}vor {{ -p.tage_bis_mhd }} Tag(en) abgelaufen
+              {% elif p.tage_bis_mhd == 0 %}läuft heute ab
+              {% else %}noch {{ p.tage_bis_mhd }} Tag(e){% endif %}
+            </span>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Menge-Stepper -->
+        <div class="stepper" style="margin-bottom:6px;">
+          <form method="post" action="{{ url_for('menge_anpassen', id=p.id, von='detail') }}" style="margin:0;">
+            <input type="hidden" name="aktion" value="verringern"><input type="hidden" name="wert" value="1">
+            <button type="submit">−</button>
+          </form>
+          <span class="menge-wert" style="font-size:1.15rem; min-width:90px;
+                color:{{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
+            {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
+          </span>
+          <form method="post" action="{{ url_for('menge_anpassen', id=p.id, von='detail') }}" style="margin:0;">
+            <input type="hidden" name="aktion" value="erhoehen"><input type="hidden" name="wert" value="1">
+            <button type="submit">+</button>
+          </form>
+          {% if p.gebinde_wert and p.gebinde_wert > 1 %}
+          <span style="font-size:0.78rem; color:var(--muted); margin-left:6px;">📦 à {{ p.gebinde_wert }} = {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten</span>
+          {% endif %}
+        </div>
+        {% if p.mindestmenge and p.mindestmenge > 0 %}
+        <div style="font-size:0.78rem; color:var(--muted);">Mindestmenge: {{ p.mindestmenge|int if p.mindestmenge == p.mindestmenge|int else p.mindestmenge }} {{ p.einheit }}</div>
+        {% endif %}
+
+        <!-- Angebrochen-Balken -->
+        <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
+          {% if p.ist_angebrochen %}
+          {% set _col = '#ef4444' if p.anbruch_prozent < 15 else '#fb923c' %}
+          <style>
+            .anbruch-wrap{position:relative;height:26px;display:flex;align-items:center;}
+            .anbruch-track{position:absolute;left:0;right:0;height:18px;border-radius:9px;background:var(--border);overflow:hidden;}
+            .anbruch-fill{height:100%;background:#fb923c;}
+            .anbruch-slider{-webkit-appearance:none;appearance:none;position:relative;width:100%;height:26px;background:transparent;outline:none;cursor:pointer;margin:0;}
+            .anbruch-slider::-webkit-slider-runnable-track{-webkit-appearance:none;height:26px;background:transparent;}
+            .anbruch-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:26px;height:26px;border-radius:50%;background:#fff;border:3px solid #fb923c;box-shadow:0 1px 4px rgba(0,0,0,.35);cursor:pointer;}
+            .anbruch-slider::-moz-range-track{height:26px;background:transparent;}
+            .anbruch-slider::-moz-range-thumb{width:26px;height:26px;border-radius:50%;background:#fff;border:3px solid #fb923c;cursor:pointer;}
+          </style>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+            <span style="font-size:0.9rem; font-weight:700; color:#fb923c;">📦 Angebrochen</span>
+            <span style="font-size:0.85rem; color:var(--muted);"><strong id="anbruch-wert" style="color:{{ _col }}; font-size:1.15rem;">{{ p.anbruch_prozent }}</strong>&nbsp;% übrig</span>
+          </div>
+          <form method="post" action="{{ url_for('produkt_anbruch', id=p.id) }}" id="anbruch-form" style="margin:0;">
+            <input type="hidden" name="aktion" value="set">
+            <div class="anbruch-wrap">
+              <div class="anbruch-track"><div id="anbruch-fill" class="anbruch-fill" style="width:{{ p.anbruch_prozent }}%; background:{{ _col }};"></div></div>
+              <input type="range" name="prozent" min="0" max="100" step="5" value="{{ p.anbruch_prozent }}"
+                     class="anbruch-slider"
+                     oninput="anbruchFill(this);"
+                     onchange="this.form.submit();">
+            </div>
+          </form>
+          <script>
+            function anbruchFill(el){
+              var v = parseInt(el.value, 10);
+              var c = v < 15 ? '#ef4444' : '#fb923c';
+              var f = document.getElementById('anbruch-fill');
+              f.style.width = v + '%';
+              f.style.background = c;
+              var w = document.getElementById('anbruch-wert');
+              w.textContent = v;
+              w.style.color = c;
+            }
+          </script>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:6px;">
+            <span style="font-size:0.74rem; color:var(--muted);">Regler ziehen. Unter 15&nbsp;% → 1&nbsp;{{ p.einheit }} abziehen &amp; schließen.</span>
+            <form method="post" action="{{ url_for('produkt_anbruch', id=p.id) }}" style="margin:0; flex:0 0 auto;">
+              <input type="hidden" name="aktion" value="stop">
+              <button type="submit" class="btn btn-ghost btn-sm">✕ Schließen</button>
+            </form>
+          </div>
+          {% else %}
+          <form method="post" action="{{ url_for('produkt_anbruch', id=p.id) }}" style="margin:0;">
+            <input type="hidden" name="aktion" value="start">
+            <button type="submit" class="btn btn-ghost btn-sm">📦 Packung anbrechen</button>
+          </form>
+          {% endif %}
+        </div>
+
+        {% if p.kcal is not none or p.eiweiss is not none or p.fett is not none or p.kohlenhydrate is not none %}
+        <div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); font-size:0.82rem;">
+          {% if p.kcal is not none %}<span><strong>{{ p.kcal|int if p.kcal == p.kcal|int else p.kcal }}</strong> kcal</span>{% endif %}
+          {% if p.eiweiss is not none %}<span style="color:var(--muted);">Eiweiß <strong style="color:var(--text);">{{ p.eiweiss }}g</strong></span>{% endif %}
+          {% if p.fett is not none %}<span style="color:var(--muted);">Fett <strong style="color:var(--text);">{{ p.fett }}g</strong></span>{% endif %}
+          {% if p.kohlenhydrate is not none %}<span style="color:var(--muted);">KH <strong style="color:var(--text);">{{ p.kohlenhydrate }}g</strong></span>{% endif %}
+          <span style="color:var(--muted); font-size:0.74rem;">je 100 g/ml</span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if p.notiz %}
+    <div style="margin-top:14px; padding:10px 12px; background:var(--bg); border-radius:8px; font-size:0.88rem; white-space:pre-wrap;">
+      📝 {{ p.notiz }}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Open Food Facts (Namenssuche) -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:6px;">🌐 Open Food Facts</div>
+    <p style="color:var(--muted); font-size:0.82rem; margin-bottom:12px;">
+      Nach dem Produkt suchen und den passenden Treffer wählen → <strong>Bild und Nährwerte</strong>
+      werden automatisch übernommen. (Kein Barcode nötig.)
+    </p>
+    <form method="post" action="{{ url_for('produkt_off_suche', id=p.id) }}"
+          style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <input type="text" name="suche" value="{{ off_begriff if off_begriff is defined else p.name }}"
+             placeholder="z.B. Nutella, Barilla Spaghetti…"
+             style="flex:1; min-width:180px; padding:10px; border:1px solid var(--border);
+                    border-radius:8px; background:var(--card); color:var(--text); font-size:0.95rem;">
+      <button type="submit" class="btn btn-primary">🔍 Suchen</button>
+    </form>
+
+    {% if off_treffer is defined and off_treffer %}
+    <div style="margin-top:14px; display:flex; flex-direction:column; gap:8px;">
+      <div style="font-size:0.8rem; color:var(--muted);">{{ off_treffer|length }} Treffer – wähle den passenden:</div>
+      {% for t in off_treffer %}
+      <div style="display:flex; align-items:center; gap:10px; padding:8px 10px; background:var(--bg); border-radius:8px;">
+        {% if t.bild %}
+          <img src="{{ t.bild }}" alt="" style="width:44px; height:44px; object-fit:cover; border-radius:6px; flex:0 0 auto;">
+        {% else %}
+          <div style="width:44px; height:44px; border-radius:6px; background:var(--border); display:flex; align-items:center; justify-content:center; flex:0 0 auto;">📦</div>
+        {% endif %}
+        <div style="flex:1; min-width:0;">
+          <div style="font-weight:500; font-size:0.88rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ t.name }}</div>
+          <div style="font-size:0.74rem; color:var(--muted);">
+            {% if t.marke %}{{ t.marke }} · {% endif %}{% if t.kcal is not none %}{{ t.kcal|int }} kcal{% else %}keine Nährwerte{% endif %}
+          </div>
+        </div>
+        <form method="post" action="{{ url_for('produkt_off_import', id=p.id) }}" style="margin:0;">
+          <input type="hidden" name="barcode" value="{{ t.code }}">
+          <button type="submit" class="btn btn-primary btn-sm">Übernehmen</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Bearbeiten: Bild / Nährwerte / Notiz -->
+  <form method="post" action="{{ url_for('produkt_detail_speichern', id=p.id) }}" enctype="multipart/form-data">
+    <div class="card">
+      <div class="card-title" style="margin-bottom:14px;">📷 Bild · 🥗 Nährwerte · 📝 Notiz</div>
+
+      <div class="form-group" style="margin-bottom:18px;">
+        <label>Produktbild {% if p.bild %}<span style="font-weight:400; color:var(--muted);">(neues Hochladen ersetzt das alte)</span>{% endif %}</label>
+        <input type="file" name="bild" accept="image/*" capture="environment">
+        {% if p.bild %}
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; font-size:0.82rem; color:var(--muted); font-weight:400;">
+          <input type="checkbox" name="bild_entfernen" value="1" style="width:auto;"> Bild entfernen
+        </label>
+        {% endif %}
+      </div>
+
+      <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">Nährwerte je 100 g/ml</label>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:10px; margin-bottom:18px;">
+        <div class="form-group"><label>Kalorien (kcal)</label><input type="number" step="0.1" min="0" name="kcal" value="{{ p.kcal if p.kcal is not none else '' }}"></div>
+        <div class="form-group"><label>Eiweiß (g)</label><input type="number" step="0.1" min="0" name="eiweiss" value="{{ p.eiweiss if p.eiweiss is not none else '' }}"></div>
+        <div class="form-group"><label>Fett (g)</label><input type="number" step="0.1" min="0" name="fett" value="{{ p.fett if p.fett is not none else '' }}"></div>
+        <div class="form-group"><label>Kohlenhydrate (g)</label><input type="number" step="0.1" min="0" name="kohlenhydrate" value="{{ p.kohlenhydrate if p.kohlenhydrate is not none else '' }}"></div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:18px;">
+        <label>Notiz</label>
+        <textarea name="notiz" rows="3" placeholder="z.B. Marke, im Angebot bei…, genauer Stellplatz"
+                  style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-size:0.9rem; resize:vertical;">{{ p.notiz or '' }}</textarea>
+      </div>
+
+      <button type="submit" class="btn btn-primary">💾 Speichern</button>
+    </div>
+  </form>
+
+  <!-- Verwendet in Rezepten -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px;">🍳 Verwendet in Rezepten</div>
+    {% if rezepte_mit %}
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        {% for r in rezepte_mit %}
+        <a href="{{ url_for('rezept_detail', id=r.id) }}"
+           style="display:flex; justify-content:space-between; align-items:center; gap:10px;
+                  padding:9px 12px; background:var(--bg); border-radius:8px; text-decoration:none; color:inherit;">
+          <span style="font-weight:500;">{{ r.name }}</span>
+          <span class="kat-tag">{{ r.kategorie }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p style="color:var(--muted); font-size:0.85rem; margin:0;">Dieses Produkt wird in keinem Rezept verwendet.</p>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}

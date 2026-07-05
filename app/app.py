@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, g, session
+from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory
+from werkzeug.utils import secure_filename
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
 import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal
@@ -11,6 +12,12 @@ app.secret_key = os.environ.get("SECRET_KEY", "vorrat-geheim")
 DB_PATH = os.environ.get("DB_PATH", "/tmp/vorrat.db")
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB Upload-Limit
+
+# Produktbilder neben der DB ablegen (im Add-on /share/vorratsverwaltung/bilder)
+BILDER_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "bilder")
+os.makedirs(BILDER_DIR, exist_ok=True)
+ERLAUBTE_BILD_EXT = {"jpg", "jpeg", "png", "gif", "webp"}
 
 db = SQLAlchemy(app)
 
@@ -26,6 +33,13 @@ class Produkt(db.Model):
     kategorie = db.Column(db.String(50), default="Sonstiges")
     mhd = db.Column(db.Date, nullable=True)
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
+    notiz = db.Column(db.Text, default="")
+    bild = db.Column(db.String(200), default="")          # Dateiname in /share/.../bilder
+    barcode = db.Column(db.String(50), default="")        # EAN für Open Food Facts
+    kcal = db.Column(db.Float, nullable=True)              # Nährwerte je 100 g/ml
+    eiweiss = db.Column(db.Float, nullable=True)
+    fett = db.Column(db.Float, nullable=True)
+    kohlenhydrate = db.Column(db.Float, nullable=True)
 
 class EinkaufsListe(db.Model):
     """Eine benannte Einkaufsliste (z.B. 'Edeka', 'Aldi')."""
@@ -595,12 +609,46 @@ def produkt_angebrochen(id):
     with db.engine.connect() as conn:
         row = conn.execute(db.text("SELECT angebrochen FROM produkt WHERE id=:id"), {"id": id}).fetchone()
         if row:
-            neu = 0 if row[0] else 1
-            conn.execute(db.text("UPDATE produkt SET angebrochen=:val WHERE id=:id"), {"val": neu, "id": id})
+            if row[0]:
+                conn.execute(db.text("UPDATE produkt SET angebrochen=0 WHERE id=:id"), {"id": id})
+            else:
+                # Beim Anbrechen Füllstand auf 100 % setzen
+                conn.execute(db.text("UPDATE produkt SET angebrochen=1, angebrochen_prozent=100 WHERE id=:id"), {"id": id})
             conn.commit()
     kat = request.args.get("kategorie") or None
     ort = request.args.get("lagerort") or None
     return redirect(url_for("index", kategorie=kat, lagerort=ort))
+
+@app.route("/produkt/<int:id>/anbruch", methods=["POST"])
+def produkt_anbruch(id):
+    """Angebrochen-Balken: anbrechen (start), schließen (stop) oder Füllstand setzen (set).
+    Rutscht der Füllstand unter 15 %, gilt die Packung als aufgebraucht:
+    1 Einheit wird abgezogen und der Anbruch geschlossen (leuchtet nicht mehr)."""
+    p = Produkt.query.get_or_404(id)
+    aktion = request.form.get("aktion", "set")
+    with db.engine.connect() as conn:
+        if aktion == "start":
+            conn.execute(db.text("UPDATE produkt SET angebrochen=1, angebrochen_prozent=100 WHERE id=:id"), {"id": id})
+        elif aktion == "stop":
+            conn.execute(db.text("UPDATE produkt SET angebrochen=0 WHERE id=:id"), {"id": id})
+        else:  # set (Schieberegler)
+            try:
+                proz = int(round(float(request.form.get("prozent", 100))))
+            except (TypeError, ValueError):
+                proz = 100
+            proz = max(0, min(100, proz))
+            if proz < 15:
+                neue_menge = max(0, (p.menge or 0) - 1)
+                conn.execute(db.text(
+                    "UPDATE produkt SET menge=:m, angebrochen=0, angebrochen_prozent=100 WHERE id=:id"),
+                    {"m": neue_menge, "id": id})
+                flash(f"Angebrochene Packung aufgebraucht – 1 {p.einheit or 'Stück'} abgezogen.", "info")
+            else:
+                conn.execute(db.text(
+                    "UPDATE produkt SET angebrochen=1, angebrochen_prozent=:p WHERE id=:id"),
+                    {"p": proz, "id": id})
+        conn.commit()
+    return redirect(url_for("produkt_detail", id=id))
 
 @app.route("/produkt/<int:id>/loeschen", methods=["POST"])
 def produkt_loeschen(id):
@@ -613,6 +661,238 @@ def produkt_loeschen(id):
     ort = request.args.get("lagerort") or None
     return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
+def render_produkt_detail(id, **extra):
+    """Baut die Produkt-Detailseite (auch für OFF-Suchergebnisse wiederverwendet)."""
+    p = Produkt.query.get_or_404(id)
+    einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
+    # angebrochen/gebinde/anbruch-% direkt per SQL (wie in der Übersicht)
+    try:
+        with db.engine.connect() as conn:
+            row = conn.execute(db.text("SELECT angebrochen, gebinde, angebrochen_prozent FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+        p.ist_angebrochen = bool(row[0]) if row else False
+        p.gebinde_wert = int(row[1] or 0) if row else 0
+        p.anbruch_prozent = int(row[2]) if (row and row[2] is not None) else 100
+    except Exception:
+        p.ist_angebrochen = False
+        p.gebinde_wert = 0
+        p.anbruch_prozent = 100
+    p.status = mhd_status(p.mhd)
+    p.tage_bis_mhd = (p.mhd - date.today()).days if p.mhd else None
+    # Verwendet in Rezepten (Namens-Abgleich)
+    rezepte_mit = []
+    for r in Rezept.query.order_by(Rezept.name).all():
+        for z in r.zutaten:
+            zn = (z.name or "").lower()
+            pn = p.name.lower()
+            if zn and (zn in pn or pn in zn):
+                rezepte_mit.append(r)
+                break
+    listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
+    return render_template("produkt_detail.html", p=p, einkauf_count=einkauf_count,
+                           rezepte_mit=rezepte_mit, listen=listen, **extra)
+
+@app.route("/produkt/<int:id>")
+def produkt_detail(id):
+    return render_produkt_detail(id)
+
+@app.route("/produkt/<int:id>/detail-speichern", methods=["POST"])
+def produkt_detail_speichern(id):
+    p = Produkt.query.get_or_404(id)
+    p.notiz = request.form.get("notiz", "").strip()
+
+    def _zahl(name):
+        v = request.form.get(name, "").strip().replace(",", ".")
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+    p.kcal = _zahl("kcal")
+    p.eiweiss = _zahl("eiweiss")
+    p.fett = _zahl("fett")
+    p.kohlenhydrate = _zahl("kohlenhydrate")
+
+    # Bild entfernen
+    if request.form.get("bild_entfernen") and p.bild:
+        try:
+            os.remove(os.path.join(BILDER_DIR, p.bild))
+        except OSError:
+            pass
+        p.bild = ""
+
+    # Bild-Upload
+    datei = request.files.get("bild")
+    if datei and datei.filename:
+        ext = datei.filename.rsplit(".", 1)[-1].lower() if "." in datei.filename else ""
+        if ext in ERLAUBTE_BILD_EXT:
+            dateiname = f"produkt_{id}.{ext}"
+            datei.save(os.path.join(BILDER_DIR, dateiname))
+            # vorhandene Bilder mit anderer Endung aufräumen
+            for e in ERLAUBTE_BILD_EXT:
+                if e != ext:
+                    alt = os.path.join(BILDER_DIR, f"produkt_{id}.{e}")
+                    if os.path.exists(alt):
+                        try: os.remove(alt)
+                        except OSError: pass
+            p.bild = dateiname
+        else:
+            flash("Bildformat nicht unterstützt (erlaubt: jpg, png, gif, webp).", "danger")
+
+    db.session.commit()
+    flash("Produkt-Details gespeichert.", "success")
+    return redirect(url_for("produkt_detail", id=id))
+
+@app.route("/produkt/<int:id>/bild")
+def produkt_bild(id):
+    p = Produkt.query.get_or_404(id)
+    if p.bild and os.path.exists(os.path.join(BILDER_DIR, p.bild)):
+        return send_from_directory(BILDER_DIR, p.bild)
+    from flask import abort
+    abort(404)
+
+def openfoodfacts_abrufen(barcode):
+    """Holt Name, Bild-URL und Nährwerte (je 100 g) von Open Food Facts."""
+    barcode = re.sub(r"\D", "", barcode or "")
+    if not barcode:
+        return None, "Bitte einen gültigen Barcode (nur Ziffern) eingeben."
+    try:
+        r = requests.get(
+            f"https://world.openfoodfacts.org/api/v2/product/{barcode}.json",
+            headers={"User-Agent": "HA-Vorratsverwaltung (github.com/jenser1/ha-vorrat-addon)"},
+            timeout=(4, 10))
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        return None, f"Open Food Facts nicht erreichbar: {e}"
+    if data.get("status") != 1 or not data.get("product"):
+        return None, f"Barcode {barcode} nicht in Open Food Facts gefunden."
+    prod = data["product"]
+    nutr = prod.get("nutriments", {})
+
+    def _n(key):
+        v = nutr.get(key)
+        try:
+            return round(float(v), 1) if v not in (None, "") else None
+        except (ValueError, TypeError):
+            return None
+    return {
+        "barcode": barcode,
+        "name": prod.get("product_name_de") or prod.get("product_name") or "",
+        "marke": (prod.get("brands") or "").split(",")[0].strip(),
+        "bild_url": prod.get("image_front_url") or prod.get("image_url") or "",
+        "kcal": _n("energy-kcal_100g"),
+        "eiweiss": _n("proteins_100g"),
+        "fett": _n("fat_100g"),
+        "kohlenhydrate": _n("carbohydrates_100g"),
+    }, None
+
+def openfoodfacts_suche(begriff):
+    """Sucht Produkte per Name in Open Food Facts; gibt Trefferliste zurück.
+    Nutzt den stabilen Such-Dienst (search.openfoodfacts.org), Legacy als Fallback."""
+    begriff = (begriff or "").strip()
+    if not begriff:
+        return [], "Bitte einen Suchbegriff eingeben."
+    UA = {"User-Agent": "HA-Vorratsverwaltung (github.com/jenser1/ha-vorrat-addon)"}
+    felder = "code,product_name,product_name_de,brands,image_front_url,image_front_thumb_url,image_url,nutriments"
+
+    produkte = None
+    letzter_fehler = ""
+    # 1. Neuer, stabiler Such-Dienst
+    try:
+        r = requests.get("https://search.openfoodfacts.org/search",
+                         params={"q": begriff, "page_size": 8, "fields": felder},
+                         headers=UA, timeout=(4, 12))
+        r.raise_for_status()
+        produkte = r.json().get("hits", [])
+    except Exception as e:
+        letzter_fehler = str(e)
+    # 2. Fallback: Legacy-Suche
+    if produkte is None:
+        try:
+            r = requests.get("https://world.openfoodfacts.org/cgi/search.pl",
+                             params={"search_terms": begriff, "search_simple": 1, "action": "process",
+                                     "json": 1, "page_size": 8, "fields": felder},
+                             headers=UA, timeout=(4, 12))
+            r.raise_for_status()
+            produkte = r.json().get("products", [])
+        except Exception as e:
+            return [], f"Open Food Facts nicht erreichbar: {letzter_fehler or e}"
+
+    treffer = []
+    for prod in produkte:
+        code = prod.get("code")
+        name = prod.get("product_name_de") or prod.get("product_name") or ""
+        if not code or not name:
+            continue
+        kcal = (prod.get("nutriments") or {}).get("energy-kcal_100g")
+        marke_roh = prod.get("brands") or ""
+        if isinstance(marke_roh, list):
+            marke = marke_roh[0].strip() if marke_roh else ""
+        else:
+            marke = marke_roh.split(",")[0].strip()
+        treffer.append({
+            "code": code,
+            "name": name,
+            "marke": marke,
+            "bild": prod.get("image_front_thumb_url") or prod.get("image_front_url") or prod.get("image_url") or "",
+            "kcal": kcal,
+        })
+        if len(treffer) >= 6:
+            break
+    if not treffer:
+        return [], f"Keine Treffer für '{begriff}'."
+    return treffer, None
+
+@app.route("/produkt/<int:id>/off-suche", methods=["POST"])
+def produkt_off_suche(id):
+    Produkt.query.get_or_404(id)
+    begriff = request.form.get("suche", "").strip()
+    treffer, fehler = openfoodfacts_suche(begriff)
+    if fehler:
+        flash(fehler, "danger")
+        return redirect(url_for("produkt_detail", id=id))
+    return render_produkt_detail(id, off_treffer=treffer, off_begriff=begriff)
+
+@app.route("/produkt/<int:id>/off-import", methods=["POST"])
+def produkt_off_import(id):
+    p = Produkt.query.get_or_404(id)
+    daten, fehler = openfoodfacts_abrufen(request.form.get("barcode", ""))
+    if fehler:
+        flash(fehler, "danger")
+        return redirect(url_for("produkt_detail", id=id))
+
+    p.barcode = daten["barcode"]
+    for feld in ("kcal", "eiweiss", "fett", "kohlenhydrate"):
+        if daten[feld] is not None:
+            setattr(p, feld, daten[feld])
+
+    bild_ok = True
+    if daten["bild_url"]:
+        try:
+            ir = requests.get(daten["bild_url"], headers=HEADERS, timeout=(4, 12))
+            ir.raise_for_status()
+            m = re.search(r"\.(jpg|jpeg|png|gif|webp)(?:\.|\?|$)", daten["bild_url"], re.I)
+            ext = (m.group(1).lower() if m else "jpg")
+            dateiname = f"produkt_{id}.{ext}"
+            with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
+                f.write(ir.content)
+            for e in ERLAUBTE_BILD_EXT:
+                if e != ext:
+                    alt = os.path.join(BILDER_DIR, f"produkt_{id}.{e}")
+                    if os.path.exists(alt):
+                        try: os.remove(alt)
+                        except OSError: pass
+            p.bild = dateiname
+        except Exception:
+            bild_ok = False
+
+    db.session.commit()
+    marke = f" ({daten['marke']})" if daten["marke"] else ""
+    if bild_ok:
+        flash(f"✅ Nährwerte & Bild von Open Food Facts übernommen{marke}.", "success")
+    else:
+        flash(f"Nährwerte übernommen{marke} – Bild konnte nicht geladen werden.", "warning")
+    return redirect(url_for("produkt_detail", id=id))
+
 @app.route("/produkt/<int:id>/menge", methods=["POST"])
 def menge_anpassen(id):
     p = Produkt.query.get_or_404(id)
@@ -623,6 +903,9 @@ def menge_anpassen(id):
     elif aktion == "verringern":
         p.menge = max(0, p.menge - wert)
     db.session.commit()
+    # Aus der Detailseite aufgerufen → dorthin zurück
+    if request.args.get("von") == "detail" or request.form.get("von") == "detail":
+        return redirect(url_for("produkt_detail", id=id))
     kat = request.args.get("kategorie") or None
     ort = request.args.get("lagerort") or None
     return redirect(url_for("index", kategorie=kat, lagerort=ort))
@@ -2268,6 +2551,21 @@ def db_migrieren():
         if tabelle_existiert("produkt") and not spalte_existiert("produkt", "gebinde"):
             cur.execute("ALTER TABLE produkt ADD COLUMN gebinde INTEGER DEFAULT 0")
             conn.commit()
+        if tabelle_existiert("produkt") and not spalte_existiert("produkt", "angebrochen_prozent"):
+            cur.execute("ALTER TABLE produkt ADD COLUMN angebrochen_prozent INTEGER DEFAULT 100")
+            conn.commit()
+        for spalte, typ in [
+            ("notiz", "TEXT DEFAULT ''"),
+            ("bild", "VARCHAR(200) DEFAULT ''"),
+            ("barcode", "VARCHAR(50) DEFAULT ''"),
+            ("kcal", "FLOAT"),
+            ("eiweiss", "FLOAT"),
+            ("fett", "FLOAT"),
+            ("kohlenhydrate", "FLOAT"),
+        ]:
+            if tabelle_existiert("produkt") and not spalte_existiert("produkt", spalte):
+                cur.execute(f"ALTER TABLE produkt ADD COLUMN {spalte} {typ}")
+                conn.commit()
 
         # rezept neue Spalten
         if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):

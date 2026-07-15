@@ -47,7 +47,7 @@
         <input type="text" name="lagerort" value="{{ produkt.lagerort if produkt else '' }}"
           list="lagerort-liste" autocomplete="off" placeholder="z. B. Kühlschrank, Keller...">
         <datalist id="lagerort-liste">
-          {% for ort in lagerorte or [] %}<option value="{{ ort }}">{% endfor %}
+          {% for ort in lagerorte or [] %}<option value="{{ ort }}">{{ '❄️ Gefrierfach' if ort in (frost_orte or []) else '' }}</option>{% endfor %}
         </datalist>
         <span style="font-size:0.72rem; color:var(--muted);">Tipp: vorhandenen Lagerort wählen vermeidet Tippfehler-Dubletten.</span>
       </div>

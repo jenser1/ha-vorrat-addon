@@ -4,6 +4,7 @@
 
 {% block topbar_actions %}
   <a href="{{ url_for('produkt_neu') }}" class="btn btn-primary">➕ Produkt hinzufügen</a>
+  <a href="{{ url_for('einfrieren') }}" class="btn btn-ghost" style="margin-left:6px;">❄️ Einfrieren</a>
 {% endblock %}
 
 {% block content %}
@@ -175,6 +176,21 @@
       {% endfor %}
     </div>
     {% endif %}
+
+    <!-- Herkunft-Chips (Tiefkühl: Garten/Reste/…) -->
+    {% if herkuenfte %}
+    <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+      <span style="font-size:0.72rem; color:var(--muted); font-weight:600; white-space:nowrap;">❄️ Herkunft:</span>
+      <a href="{{ url_for('index', kategorie=kat_filter, lagerort=ort_filter) }}"
+         class="btn btn-ghost btn-sm {% if not herkunft_filter %}btn-primary{% endif %}">Alle</a>
+      {% for h in herkuenfte %}
+        <a href="{{ url_for('index', kategorie=kat_filter, lagerort=ort_filter, herkunft=h) }}"
+           class="btn btn-sm {% if herkunft_filter == h %}btn-primary{% else %}btn-ghost{% endif %}">
+          {{ h }}
+        </a>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 
   {% if produkte %}
@@ -204,6 +220,7 @@
                onmouseover="this.style.textDecoration='underline'"
                onmouseout="this.style.textDecoration='none'"
                title="Details öffnen"><strong>{{ p.name }}</strong></a>
+            {% if p.ist_eingefroren %}<span title="Tiefkühl{% if p.herkunft %} · {{ p.herkunft }}{% endif %}" style="margin-left:4px;">❄️</span>{% endif %}
           </td>
           <td class="td-menge">
             {% if p.gebinde_wert and p.gebinde_wert > 1 %}

@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.0
+**Aktuelle Version:** 1.6.1
 
 ---
 
@@ -53,8 +53,9 @@ ha-vorrat-addon/
 Produkt: id, name, menge, einheit, mindestmenge, lagerort,
          kategorie, mhd, angebrochen, gebinde, erstellt,
          notiz, bild, barcode, kcal, eiweiss, fett, kohlenhydrate,
-         angebrochen_prozent
-         (angebrochen/gebinde/angebrochen_prozent: nur per Raw-SQL, nicht im ORM)
+         angebrochen_prozent, eingefroren, einfrierdatum, herkunft
+         (angebrochen/gebinde/angebrochen_prozent/eingefroren/
+          einfrierdatum/herkunft: nur per Raw-SQL, nicht im ORM)
 
 EinkaufsListe: id, name, erstellt
 
@@ -69,8 +70,9 @@ RezeptZutat: id, rezept_id, name, menge, einheit
 
 Einstellungen: id, sprache, waehrung, theme, farbe, kalender_entity
 
-Stammdaten: id, typ (lagerort/kategorie/einheit), name
+Stammdaten: id, typ (lagerort/kategorie/einheit), name, ist_frost
             (UNIQUE: typ + name) – verwaltbare Listen
+            (ist_frost: Lagerort = Gefrierfach ❄️, nur per Raw-SQL)
 
 Essensplan: id, datum, mahlzeit (fruehstueck/mittag/abend),
             rezept_id, freitext, personen, erstellt, cal_synced_at
@@ -118,6 +120,14 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Angebrochen-Balken auf der Detailseite: Füllstand-Schieberegler (angebrochen_prozent)
   - Route /produkt/<id>/anbruch (aktion=start/stop/set); unter 15 % → menge-1, angebrochen=0
   - farbige Füll-Div (orange, <15 % rot), Slider transparent darüber (WebKit-tauglich)
+- Einfrieren / Tiefkühl (❄️): Reste/Garten-Ernte als Tiefkühl-Produkt
+  - Route /einfrieren (Dialog); kategorie=Tiefkühl, mhd = Einfrierdatum + Richtwert
+    (monate_addieren, EINFRIER_RICHTWERT, Standard 12 Monate)
+  - Spalten eingefroren/einfrierdatum/herkunft; Herkunft-Filter + ❄️-Badge in der Übersicht
+  - Tiefkühl-Karte auf der Produktseite: Route /produkt/<id>/tiefkuehl
+  - Lagerorte als Gefrierfach markierbar (Stammdaten.ist_frost, Route /stammdaten/frost);
+    Einfrieren-Dialog zeigt nur Frost-Lagerorte, neue Orte werden auto-markiert
+  - Sensor sensor.vorrat_tiefkuehl (Anzahl eingefrorener Produkte)
 - Gebinde-Funktion (Kisten, Pakete) mit zwei Steppern
 - Nullbestände automatisch ans Ende sortiert
 - Mehrere Einkaufslisten mit Drag & Drop

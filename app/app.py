@@ -377,6 +377,25 @@ def mhd_status(mhd):
         return "warnung"
     return "ok"
 
+def monate_addieren(d, n):
+    """Datum + n Monate (ohne externe Lib). Begrenzt den Tag aufs Monatsende."""
+    monat = d.month - 1 + int(n)
+    jahr = d.year + monat // 12
+    monat = monat % 12 + 1
+    if monat == 12:
+        naechster = date(jahr + 1, 1, 1)
+    else:
+        naechster = date(jahr, monat + 1, 1)
+    letzter_tag = (naechster - timedelta(days=1)).day
+    return date(jahr, monat, min(d.day, letzter_tag))
+
+# Richtwerte Gefrier-Haltbarkeit in Monaten (Standard 12 = 1 Jahr)
+EINFRIER_RICHTWERT = {
+    "Gemüse": 12, "Obst": 12, "Fleisch": 6, "Fisch": 3,
+    "Gekochtes/Reste": 3, "Backwaren": 3, "Kräuter": 12, "Sonstiges": 12,
+}
+HERKUNFT_OPTIONEN = ["Garten", "Reste", "Selbstgemacht", "Eingekauft"]
+
 # ── Routen: Übersicht ──────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -415,21 +434,33 @@ def index():
     if ort_filter:
         produkte = [p for p in produkte if p.lagerort == ort_filter]
 
-    # angebrochen und gebinde direkt per SQL laden
+    # angebrochen/gebinde/eingefroren/herkunft direkt per SQL laden
     try:
         _conn = sqlite3.connect(DB_PATH)
-        _rows = _conn.execute("SELECT id, angebrochen, gebinde FROM produkt").fetchall()
+        _rows = _conn.execute("SELECT id, angebrochen, gebinde, eingefroren, herkunft FROM produkt").fetchall()
         _conn.close()
         _angebrochen_ids = set(r[0] for r in _rows if r[1])
         _gebinde_map = {r[0]: int(r[2] or 0) for r in _rows}
+        _eingefroren_ids = set(r[0] for r in _rows if r[3])
+        _herkunft_map = {r[0]: (r[4] or "") for r in _rows}
     except:
         _angebrochen_ids = set()
         _gebinde_map = {}
+        _eingefroren_ids = set()
+        _herkunft_map = {}
 
     for p in produkte:
         p.mhd_status = mhd_status(p.mhd)
         p.ist_angebrochen = p.id in _angebrochen_ids
         p.gebinde_wert = _gebinde_map.get(p.id, 0)
+        p.ist_eingefroren = p.id in _eingefroren_ids
+        p.herkunft = _herkunft_map.get(p.id, "")
+
+    # Herkunft-Filter (Garten/Reste/…) – auf alle Produkte bezogen
+    herkuenfte = sorted({v for v in _herkunft_map.values() if v})
+    herkunft_filter = request.args.get("herkunft", "")
+    if herkunft_filter:
+        produkte = [p for p in produkte if getattr(p, "herkunft", "") == herkunft_filter]
 
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     alle_listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
@@ -441,8 +472,10 @@ def index():
         unter_mindest=unter_mindest,
         kategorien=kategorien,
         lagerorte=lagerorte,
+        herkuenfte=herkuenfte,
         kat_filter=kat_filter,
         ort_filter=ort_filter,
+        herkunft_filter=herkunft_filter,
         sort=sort,
         einkauf_count=einkauf_count,
         alle_listen=alle_listen,
@@ -469,12 +502,33 @@ def stammdaten_sicherstellen(typ, name):
     if name and typ in STAMM_FELD and not Stammdaten.query.filter_by(typ=typ, name=name).first():
         db.session.add(Stammdaten(typ=typ, name=name))
 
+def frost_lagerorte():
+    """Namen der als Gefrierfach (Frost) markierten Lagerorte (Raw-SQL, nicht im ORM)."""
+    try:
+        with db.engine.connect() as conn:
+            rows = conn.execute(db.text("SELECT name FROM stammdaten WHERE typ='lagerort' AND ist_frost=1")).fetchall()
+        return {r[0] for r in rows}
+    except Exception:
+        return set()
+
+def lagerort_frost_setzen(name, wert):
+    """Frost-Flag eines Lagerorts setzen (Raw-SQL)."""
+    name = (name or "").strip()
+    if not name:
+        return
+    with db.engine.connect() as conn:
+        conn.execute(db.text("UPDATE stammdaten SET ist_frost=:v WHERE typ='lagerort' AND name=:n"),
+                     {"v": 1 if wert else 0, "n": name})
+        conn.commit()
+
 def stammdaten_mit_anzahl(typ):
-    """Liste {name, anzahl} – anzahl = wie viele Produkte den Wert nutzen."""
+    """Liste {name, anzahl, ist_frost} – anzahl = wie viele Produkte den Wert nutzen."""
     feld = STAMM_FELD[typ]
+    frost = frost_lagerorte() if typ == "lagerort" else set()
     out = []
     for s in Stammdaten.query.filter_by(typ=typ).order_by(Stammdaten.name).all():
-        out.append({"name": s.name, "anzahl": Produkt.query.filter(feld == s.name).count()})
+        out.append({"name": s.name, "anzahl": Produkt.query.filter(feld == s.name).count(),
+                    "ist_frost": s.name in frost})
     return out
 
 @app.route("/stammdaten/neu", methods=["POST"])
@@ -526,6 +580,14 @@ def stammdaten_loeschen():
         flash(f"'{name}' gelöscht.", "success")
     return redirect(url_for("einstellungen") + "#verwaltung")
 
+@app.route("/stammdaten/frost", methods=["POST"])
+def stammdaten_frost():
+    """Frost-Markierung (❄️ Gefrierfach) eines Lagerorts umschalten."""
+    name = request.form.get("name", "").strip()
+    if name:
+        lagerort_frost_setzen(name, name not in frost_lagerorte())
+    return redirect(url_for("einstellungen") + "#verwaltung")
+
 @app.route("/produkt/neu", methods=["GET", "POST"])
 def produkt_neu():
     if request.method == "POST":
@@ -558,7 +620,8 @@ def produkt_neu():
     return render_template("produkt_form.html", produkt=None,
                            lagerorte=stammdaten_liste("lagerort"),
                            kategorien=stammdaten_liste("kategorie"),
-                           einheiten=stammdaten_liste("einheit"))
+                           einheiten=stammdaten_liste("einheit"),
+                           frost_orte=sorted(frost_lagerorte()))
 
 @app.route("/produkt/<int:id>/bearbeiten", methods=["GET", "POST"])
 def produkt_bearbeiten(id):
@@ -602,7 +665,8 @@ def produkt_bearbeiten(id):
                            zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort,
                            lagerorte=stammdaten_liste("lagerort"),
                            kategorien=stammdaten_liste("kategorie"),
-                           einheiten=stammdaten_liste("einheit"))
+                           einheiten=stammdaten_liste("einheit"),
+                           frost_orte=sorted(frost_lagerorte()))
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
@@ -661,6 +725,86 @@ def produkt_loeschen(id):
     ort = request.args.get("lagerort") or None
     return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
+@app.route("/einfrieren", methods=["GET", "POST"])
+def einfrieren():
+    """Eigener Dialog zum Einfrieren von Resten/Garten-Ernte -> Tiefkühl-Produkt."""
+    heute = date.today()
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Bitte einen Namen angeben.", "danger")
+            return redirect(url_for("einfrieren"))
+        try:
+            menge = float(request.form.get("menge", 1) or 1)
+        except ValueError:
+            menge = 1
+        einheit = request.form.get("einheit", "Portionen") or "Portionen"
+        lagerort = request.form.get("lagerort", "").strip()
+        herkunft = request.form.get("herkunft", "").strip()
+        notiz = request.form.get("notiz", "").strip()
+        ef_str = request.form.get("einfrierdatum")
+        try:
+            einfrierdatum = datetime.strptime(ef_str, "%Y-%m-%d").date() if ef_str else heute
+        except ValueError:
+            einfrierdatum = heute
+        vb_str = request.form.get("verbrauchen_bis")
+        try:
+            mhd = datetime.strptime(vb_str, "%Y-%m-%d").date() if vb_str else monate_addieren(einfrierdatum, 12)
+        except ValueError:
+            mhd = monate_addieren(einfrierdatum, 12)
+        p = Produkt(name=name, menge=menge, einheit=einheit, mindestmenge=0,
+                    lagerort=lagerort, kategorie="Tiefkühl", mhd=mhd, notiz=notiz)
+        db.session.add(p)
+        db.session.commit()
+        # Tiefkühl-Felder per Raw-SQL (nicht im ORM), wie gebinde/angebrochen
+        with db.engine.connect() as conn:
+            conn.execute(db.text(
+                "UPDATE produkt SET eingefroren=1, einfrierdatum=:ef, herkunft=:hk WHERE id=:id"),
+                {"ef": einfrierdatum.isoformat(), "hk": herkunft, "id": p.id})
+            conn.commit()
+        stammdaten_sicherstellen("lagerort", lagerort)
+        stammdaten_sicherstellen("kategorie", "Tiefkühl")
+        stammdaten_sicherstellen("einheit", einheit)
+        db.session.commit()
+        if lagerort:
+            lagerort_frost_setzen(lagerort, True)  # Einfrier-Ziel automatisch als Frost markieren
+        flash(f"'{name}' eingefroren ({herkunft or 'Vorrat'}).", "success")
+        return redirect(url_for("index"))
+    return render_template("einfrieren.html",
+                           heute=heute.isoformat(),
+                           verbrauchen_bis=monate_addieren(heute, 12).isoformat(),
+                           richtwerte=EINFRIER_RICHTWERT,
+                           herkunft_optionen=HERKUNFT_OPTIONEN,
+                           frost_orte=sorted(frost_lagerorte()),
+                           lagerorte=stammdaten_liste("lagerort"),
+                           einheiten=stammdaten_liste("einheit"))
+
+@app.route("/produkt/<int:id>/tiefkuehl", methods=["POST"])
+def produkt_tiefkuehl(id):
+    """Tiefkühl-Angaben (Einfrierdatum, Verbrauchen bis = mhd, Herkunft) bearbeiten."""
+    p = Produkt.query.get_or_404(id)
+    herkunft = request.form.get("herkunft", "").strip()
+    vb_str = request.form.get("verbrauchen_bis")
+    if vb_str:
+        try:
+            p.mhd = datetime.strptime(vb_str, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    db.session.commit()
+    ef_str = request.form.get("einfrierdatum")
+    with db.engine.connect() as conn:
+        conn.execute(db.text("UPDATE produkt SET herkunft=:hk WHERE id=:id"), {"hk": herkunft, "id": id})
+        if ef_str:
+            try:
+                ef = datetime.strptime(ef_str, "%Y-%m-%d").date()
+                conn.execute(db.text("UPDATE produkt SET einfrierdatum=:ef WHERE id=:id"),
+                             {"ef": ef.isoformat(), "id": id})
+            except ValueError:
+                pass
+        conn.commit()
+    flash("Tiefkühl-Angaben gespeichert.", "success")
+    return redirect(url_for("produkt_detail", id=id))
+
 def render_produkt_detail(id, **extra):
     """Baut die Produkt-Detailseite (auch für OFF-Suchergebnisse wiederverwendet)."""
     p = Produkt.query.get_or_404(id)
@@ -668,14 +812,25 @@ def render_produkt_detail(id, **extra):
     # angebrochen/gebinde/anbruch-% direkt per SQL (wie in der Übersicht)
     try:
         with db.engine.connect() as conn:
-            row = conn.execute(db.text("SELECT angebrochen, gebinde, angebrochen_prozent FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+            row = conn.execute(db.text("SELECT angebrochen, gebinde, angebrochen_prozent, eingefroren, einfrierdatum, herkunft FROM produkt WHERE id=:id"), {"id": id}).fetchone()
         p.ist_angebrochen = bool(row[0]) if row else False
         p.gebinde_wert = int(row[1] or 0) if row else 0
         p.anbruch_prozent = int(row[2]) if (row and row[2] is not None) else 100
+        p.ist_eingefroren = bool(row[3]) if row else False
+        p.einfrierdatum = None
+        if row and row[4]:
+            try:
+                p.einfrierdatum = datetime.strptime(str(row[4])[:10], "%Y-%m-%d").date()
+            except ValueError:
+                p.einfrierdatum = None
+        p.herkunft = (row[5] or "") if row else ""
     except Exception:
         p.ist_angebrochen = False
         p.gebinde_wert = 0
         p.anbruch_prozent = 100
+        p.ist_eingefroren = False
+        p.einfrierdatum = None
+        p.herkunft = ""
     p.status = mhd_status(p.mhd)
     p.tage_bis_mhd = (p.mhd - date.today()).days if p.mhd else None
     # Verwendet in Rezepten (Namens-Abgleich)
@@ -2421,6 +2576,14 @@ def ha_sensoren_aktualisieren():
                     # Einkaufsliste (offene Artikel)
                     einkauf_offen = Einkaufsliste.query.filter_by(erledigt=False).count()
 
+                    # Tiefkühl-Bestand (eingefrorene Produkte) – Raw-SQL, da nicht im ORM
+                    try:
+                        _c = sqlite3.connect(DB_PATH)
+                        tiefkuehl = _c.execute("SELECT COUNT(*) FROM produkt WHERE eingefroren=1").fetchone()[0]
+                        _c.close()
+                    except Exception:
+                        tiefkuehl = 0
+
                     # Sensor: Abgelaufen
                     sensor_setzen("sensor.vorrat_abgelaufen", len(abgelaufen), {
                         "friendly_name": "Vorrat: Abgelaufen",
@@ -2473,7 +2636,15 @@ def ha_sensoren_aktualisieren():
                         "icon": "mdi:cart",
                     })
 
-                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min., {einkauf_offen} Einkauf offen.", flush=True)
+                    # Sensor: Tiefkühl-Bestand
+                    sensor_setzen("sensor.vorrat_tiefkuehl", tiefkuehl, {
+                        "friendly_name": "Vorrat: Tiefkühl",
+                        "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
+                        "icon": "mdi:snowflake",
+                    })
+
+                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min., {einkauf_offen} Einkauf offen, {tiefkuehl} TK.", flush=True)
 
             except Exception as e:
                 print(f"HA Update Fehler: {e}", flush=True)
@@ -2562,10 +2733,18 @@ def db_migrieren():
             ("eiweiss", "FLOAT"),
             ("fett", "FLOAT"),
             ("kohlenhydrate", "FLOAT"),
+            ("eingefroren", "BOOLEAN DEFAULT 0"),
+            ("einfrierdatum", "DATE"),
+            ("herkunft", "VARCHAR(30) DEFAULT ''"),
         ]:
             if tabelle_existiert("produkt") and not spalte_existiert("produkt", spalte):
                 cur.execute(f"ALTER TABLE produkt ADD COLUMN {spalte} {typ}")
                 conn.commit()
+
+        # stammdaten: Frost-Flag für Lagerorte
+        if tabelle_existiert("stammdaten") and not spalte_existiert("stammdaten", "ist_frost"):
+            cur.execute("ALTER TABLE stammdaten ADD COLUMN ist_frost BOOLEAN DEFAULT 0")
+            conn.commit()
 
         # rezept neue Spalten
         if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):

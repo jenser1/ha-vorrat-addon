@@ -32,6 +32,7 @@
         <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
           <span class="kat-tag">{{ p.kategorie }}</span>
           {% if p.lagerort %}<span style="font-size:0.82rem; color:var(--muted);">📍 {{ p.lagerort }}</span>{% endif %}
+          {% if p.ist_eingefroren %}<span style="font-size:0.78rem; color:#38bdf8; font-weight:600;">❄️ Tiefkühl{% if p.herkunft %} · {{ p.herkunft }}{% endif %}</span>{% endif %}
         </div>
 
         {% if p.mhd %}
@@ -142,6 +143,40 @@
     </div>
     {% endif %}
   </div>
+
+  {% if p.ist_eingefroren %}
+  <!-- Tiefkühl -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px;">❄️ Tiefkühl</div>
+    <form method="post" action="{{ url_for('produkt_tiefkuehl', id=p.id) }}">
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:14px;">
+        <div class="form-group">
+          <label>Eingefroren am</label>
+          <input type="date" name="einfrierdatum" value="{{ p.einfrierdatum.strftime('%Y-%m-%d') if p.einfrierdatum else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Verbrauchen bis</label>
+          <input type="date" name="verbrauchen_bis" value="{{ p.mhd.strftime('%Y-%m-%d') if p.mhd else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Herkunft</label>
+          <input type="text" name="herkunft" value="{{ p.herkunft or '' }}" list="herkunft-liste" autocomplete="off" placeholder="Garten, Reste…">
+          <datalist id="herkunft-liste">
+            <option value="Garten"><option value="Reste"><option value="Selbstgemacht"><option value="Eingekauft">
+          </datalist>
+        </div>
+      </div>
+      {% if p.tage_bis_mhd is not none %}
+      <div style="font-size:0.82rem; margin-bottom:12px; color:{{ '#ef4444' if p.tage_bis_mhd < 0 else 'var(--muted)' }};">
+        {% if p.tage_bis_mhd < 0 %}⚠️ Seit {{ -p.tage_bis_mhd }} Tag(en) über „Verbrauchen bis"
+        {% elif p.tage_bis_mhd == 0 %}Heute aufbrauchen
+        {% else %}Noch {{ p.tage_bis_mhd }} Tag(e) haltbar{% endif %}
+      </div>
+      {% endif %}
+      <button type="submit" class="btn btn-primary btn-sm">💾 Tiefkühl-Angaben speichern</button>
+    </form>
+  </div>
+  {% endif %}
 
   <!-- Open Food Facts (Namenssuche) -->
   <div class="card">

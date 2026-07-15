@@ -166,6 +166,14 @@
             <input type="text" name="neu" value="{{ e.name }}" style="flex:1; min-width:0; padding:6px 8px; font-size:0.85rem;">
             <button type="submit" class="btn btn-ghost btn-sm" title="Umbenennen / zusammenführen">💾</button>
           </form>
+          {% if typ == 'lagerort' %}
+          <form method="post" action="{{ url_for('stammdaten_frost') }}" style="display:inline; margin:0;">
+            <input type="hidden" name="name" value="{{ e.name }}">
+            <button type="submit" class="btn btn-ghost btn-sm"
+                    style="{% if e.ist_frost %}background:#e0f2fe; border-color:#38bdf8;{% else %}opacity:0.4;{% endif %}"
+                    title="{{ 'Frost-Markierung entfernen' if e.ist_frost else 'Als ❄️ Gefrierfach markieren' }}">❄️</button>
+          </form>
+          {% endif %}
           <span title="{{ e.anzahl }}× von Produkten genutzt"
                 style="font-size:0.72rem; color:var(--muted); white-space:nowrap; min-width:34px; text-align:right;">
             {{ e.anzahl }}×

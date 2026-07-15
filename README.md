@@ -18,6 +18,7 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **Produkt-Detailseite** (Klick auf den Namen): Bild, Nährwerte, Notiz und „verwendet in Rezepten"
 - **Bild & Nährwerte** per Foto-Upload oder automatisch über **Open Food Facts** (Namenssuche)
 - **Angebrochen-Balken**: Füllstand der offenen Packung per Schieberegler – unter 15 % wird automatisch 1 abgezogen
+- **❄️ Einfrieren**: Reste/Garten-Ernte als Tiefkühl-Vorrat erfassen – „Verbrauchen bis" automatisch (Standard 1 Jahr), Herkunft (Garten/Reste/…), Lagerorte als Gefrierfach markierbar
 
 ### 🛒 Einkaufslisten
 - **Mehrere Listen** – z.B. Edeka, Aldi, Drogerie
@@ -50,6 +51,7 @@ Automatisch verfügbare HA-Sensoren:
 | `sensor.vorrat_unter_mindestmenge` | Unter Mindestmenge |
 | `sensor.vorrat_gesamt` | Gesamtanzahl Produkte |
 | `sensor.vorrat_einkaufsliste` | Offene Artikel in Einkaufslisten |
+| `sensor.vorrat_tiefkuehl` | Anzahl eingefrorener Produkte |
 
 ### 🌍 Mehrsprachig & Mehrere Währungen
 - Sprachen: Deutsch, Englisch, Französisch, Spanisch
@@ -113,6 +115,14 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.6.1
+- ❄️ **Einfrieren-Dialog**: Reste/Garten-Ernte als Tiefkühl-Produkt anlegen (Portionen, Herkunft, Einfrierdatum)
+- ⏱️ **„Verbrauchen bis" automatisch** aus Einfrierdatum + Richtwert (Standard 1 Jahr, je Art anpassbar) – zählt in die MHD-Warnungen
+- 🏷️ **Herkunft** (Garten/Reste/Selbstgemacht/Eingekauft) mit Filter in der Übersicht + ❄️-Kennzeichnung
+- 📍 **Lagerorte als Gefrierfach** (❄️) markierbar (Einstellungen → Verwaltung); im Einfrieren-Dialog nur diese zur Auswahl
+- 🧊 **Tiefkühl-Karte** auf der Produktseite (Einfrierdatum, Verbrauchen bis, Herkunft)
+- 📊 Neuer Sensor `sensor.vorrat_tiefkuehl`
 
 ### 1.6.0
 - 🔎 **Produkt-Detailseite** – öffnet sich per Klick auf den Produktnamen in der Übersicht

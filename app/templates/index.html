@@ -4,7 +4,7 @@
 
 {% block topbar_actions %}
   <a href="{{ url_for('produkt_neu') }}" class="btn btn-primary">➕ Produkt hinzufügen</a>
-  <a href="{{ url_for('einfrieren') }}" class="btn btn-ghost" style="margin-left:6px;">❄️ Einfrieren</a>
+  <a href="{{ url_for('produkt_neu', frost=1) }}" class="btn btn-ghost" style="margin-left:6px;">❄️ Einfrieren</a>
 {% endblock %}
 
 {% block content %}

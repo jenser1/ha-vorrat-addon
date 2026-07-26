@@ -1,15 +1,41 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory
-from werkzeug.utils import secure_filename
+from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory, abort
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
-import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal
+import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal, secrets, hmac
 from bs4 import BeautifulSoup
 from translations import TRANSLATIONS, CURRENCIES, LANGUAGES, get_translation, format_currency
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "vorrat-geheim")
 
 DB_PATH = os.environ.get("DB_PATH", "/tmp/vorrat.db")
+
+def _secret_key_laden():
+    """SECRET_KEY aus der Umgebung, sonst persistenter Zufallsschlüssel neben der DB.
+    Kein hartkodierter Default – sonst wären Session-Cookies mit bekanntem Schlüssel signiert.
+    Persistent, damit Sessions (und CSRF-Token) einen Neustart überleben."""
+    k = (os.environ.get("SECRET_KEY") or "").strip()
+    if k:
+        return k
+    pfad = os.path.join(os.path.dirname(DB_PATH) or ".", ".secret_key")
+    try:
+        if os.path.exists(pfad):
+            with open(pfad) as f:
+                vorhanden = f.read().strip()
+            if vorhanden:
+                return vorhanden
+        os.makedirs(os.path.dirname(pfad) or ".", exist_ok=True)
+        neu = secrets.token_urlsafe(48)
+        with open(pfad, "w") as f:
+            f.write(neu)
+        try:
+            os.chmod(pfad, 0o600)
+        except OSError:
+            pass
+        return neu
+    except OSError:
+        return secrets.token_urlsafe(48)  # Notfall: pro Start neu
+
+app.secret_key = _secret_key_laden()
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB Upload-Limit
@@ -18,8 +44,45 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB Upload-Limit
 BILDER_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "bilder")
 os.makedirs(BILDER_DIR, exist_ok=True)
 ERLAUBTE_BILD_EXT = {"jpg", "jpeg", "png", "gif", "webp"}
+MAX_BILD_BYTES = 5 * 1024 * 1024  # Obergrenze für heruntergeladene Bilder (Open Food Facts)
 
 db = SQLAlchemy(app)
+
+# ── CSRF-Schutz ────────────────────────────────────────────────────────────────
+# Token pro Session. Wird per after_request automatisch in jedes POST-Formular
+# injiziert – so kann kein Formular vergessen werden (auch künftige nicht).
+
+def csrf_token():
+    if "_csrf" not in session:
+        session["_csrf"] = secrets.token_urlsafe(32)
+    return session["_csrf"]
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+@app.before_request
+def csrf_pruefen():
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return
+    erwartet = session.get("_csrf", "")
+    gesendet = request.form.get("_csrf") or request.headers.get("X-CSRF-Token", "")
+    if not erwartet or not gesendet or not hmac.compare_digest(str(erwartet), str(gesendet)):
+        abort(400, description="CSRF-Token ungültig oder abgelaufen – bitte die Seite neu laden.")
+
+_FORM_POST_RE = re.compile(rb'(<form\b[^>]*\bmethod\s*=\s*["\']post["\'][^>]*>)', re.I)
+
+@app.after_request
+def csrf_injizieren(resp):
+    """Hängt jedem POST-Formular ein verstecktes CSRF-Feld an."""
+    if resp.direct_passthrough or not (resp.content_type or "").startswith("text/html"):
+        return resp
+    try:
+        feld = b'<input type="hidden" name="_csrf" value="' + csrf_token().encode() + b'">'
+        body, n = _FORM_POST_RE.subn(lambda m: m.group(1) + feld, resp.get_data())
+        if n:
+            resp.set_data(body)
+    except Exception:
+        pass
+    return resp
 
 # ── Modelle ────────────────────────────────────────────────────────────────────
 
@@ -449,11 +512,13 @@ def index():
         _eingefroren_ids = set()
         _herkunft_map = {}
 
+    _frost_orte = frost_lagerorte()
     for p in produkte:
         p.mhd_status = mhd_status(p.mhd)
         p.ist_angebrochen = p.id in _angebrochen_ids
         p.gebinde_wert = _gebinde_map.get(p.id, 0)
-        p.ist_eingefroren = p.id in _eingefroren_ids
+        # eingefroren = manuell markiert ODER liegt in einem ❄️-Gefrierfach-Lagerort
+        p.ist_eingefroren = (p.id in _eingefroren_ids) or bool(p.lagerort and p.lagerort in _frost_orte)
         p.herkunft = _herkunft_map.get(p.id, "")
 
     # Herkunft-Filter (Garten/Reste/…) – auf alle Produkte bezogen
@@ -552,6 +617,8 @@ def stammdaten_umbenennen():
     if typ not in STAMM_FELD or not alt or not neu or alt == neu:
         return redirect(url_for("einstellungen") + "#verwaltung")
     feld = STAMM_FELD[typ]
+    # Frost-Markierung merken – der alte Stammdaten-Eintrag wird gleich gelöscht
+    war_frost = (typ == "lagerort" and alt in frost_lagerorte())
     # Produkte umstellen (führt Dubletten zusammen)
     anzahl = Produkt.query.filter(feld == alt).update({feld.key: neu}, synchronize_session=False)
     # Stammdaten: alten Eintrag entfernen, neuen sicherstellen
@@ -560,6 +627,8 @@ def stammdaten_umbenennen():
         db.session.delete(alt_row)
     stammdaten_sicherstellen(typ, neu)
     db.session.commit()
+    if war_frost:
+        lagerort_frost_setzen(neu, True)  # ❄️ darf beim Umbenennen nicht verloren gehen
     flash(f"'{alt}' → '{neu}' ({anzahl} Produkt(e) umgestellt).", "success")
     return redirect(url_for("einstellungen") + "#verwaltung")
 
@@ -588,19 +657,52 @@ def stammdaten_frost():
         lagerort_frost_setzen(name, name not in frost_lagerorte())
     return redirect(url_for("einstellungen") + "#verwaltung")
 
+def frost_effektives_mhd(form, standard_mhd):
+    """Bei 'eingefroren' ist 'Verbrauchen bis' das MHD, sonst das normale MHD-Feld."""
+    if not form.get("eingefroren"):
+        return standard_mhd
+    vb = (form.get("verbrauchen_bis") or "").strip()
+    if not vb:
+        return standard_mhd
+    try:
+        return datetime.strptime(vb, "%Y-%m-%d").date()
+    except ValueError:
+        return standard_mhd
+
+def frost_felder_speichern(pid, form):
+    """Schreibt eingefroren/einfrierdatum/herkunft aus dem Produktformular (Raw-SQL)."""
+    eingefroren = 1 if form.get("eingefroren") else 0
+    einfrierdatum = None
+    herkunft = ""
+    if eingefroren:
+        herkunft = (form.get("herkunft") or "").strip()
+        ef = (form.get("einfrierdatum") or "").strip()
+        try:
+            einfrierdatum = datetime.strptime(ef, "%Y-%m-%d").date() if ef else date.today()
+        except ValueError:
+            einfrierdatum = date.today()
+    with db.engine.connect() as conn:
+        conn.execute(db.text("UPDATE produkt SET eingefroren=:e, einfrierdatum=:d, herkunft=:h WHERE id=:id"),
+                     {"e": eingefroren, "d": einfrierdatum.isoformat() if einfrierdatum else None,
+                      "h": herkunft, "id": pid})
+        conn.commit()
+
 @app.route("/produkt/neu", methods=["GET", "POST"])
 def produkt_neu():
     if request.method == "POST":
         mhd_str = request.form.get("mhd")
-        mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
+        try:
+            standard_mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
+        except ValueError:
+            standard_mhd = None
         p = Produkt(
             name=request.form["name"],
-            menge=float(request.form.get("menge", 1)),
+            menge=float(request.form.get("menge", 1) or 1),
             einheit=request.form.get("einheit", "Stück"),
-            mindestmenge=float(request.form.get("mindestmenge", 1)),
+            mindestmenge=float(request.form.get("mindestmenge", 1) or 1),
             lagerort=request.form.get("lagerort", ""),
             kategorie=request.form.get("kategorie", "Sonstiges"),
-            mhd=mhd
+            mhd=frost_effektives_mhd(request.form, standard_mhd)
         )
         db.session.add(p)
         db.session.commit()
@@ -615,26 +717,36 @@ def produkt_neu():
             with db.engine.connect() as conn:
                 conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": p.id})
                 conn.commit()
+        frost_felder_speichern(p.id, request.form)
         flash(f"'{p.name}' wurde hinzugefügt.", "success")
         return redirect(url_for("index"))
     return render_template("produkt_form.html", produkt=None,
                            lagerorte=stammdaten_liste("lagerort"),
                            kategorien=stammdaten_liste("kategorie"),
                            einheiten=stammdaten_liste("einheit"),
-                           frost_orte=sorted(frost_lagerorte()))
+                           frost_orte=sorted(frost_lagerorte()),
+                           richtwerte=EINFRIER_RICHTWERT,
+                           herkunft_optionen=HERKUNFT_OPTIONEN,
+                           heute=date.today().isoformat(),
+                           vb_default=monate_addieren(date.today(), 12).isoformat(),
+                           frost_vorwahl=bool(request.args.get("frost")))
 
 @app.route("/produkt/<int:id>/bearbeiten", methods=["GET", "POST"])
 def produkt_bearbeiten(id):
     p = Produkt.query.get_or_404(id)
     if request.method == "POST":
         p.name = request.form["name"]
-        p.menge = float(request.form.get("menge", 1))
+        p.menge = float(request.form.get("menge", 1) or 1)
         p.einheit = request.form.get("einheit", "Stück")
-        p.mindestmenge = float(request.form.get("mindestmenge", 1))
+        p.mindestmenge = float(request.form.get("mindestmenge", 1) or 1)
         p.lagerort = request.form.get("lagerort", "")
         p.kategorie = request.form.get("kategorie", "Sonstiges")
         mhd_str = request.form.get("mhd")
-        p.mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
+        try:
+            standard_mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
+        except ValueError:
+            standard_mhd = None
+        p.mhd = frost_effektives_mhd(request.form, standard_mhd)
         db.session.commit()
         # Neue Werte als Stammdaten sichern
         stammdaten_sicherstellen("lagerort", p.lagerort)
@@ -646,6 +758,7 @@ def produkt_bearbeiten(id):
         with db.engine.connect() as conn:
             conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": id})
             conn.commit()
+        frost_felder_speichern(id, request.form)
         flash(f"'{p.name}' wurde gespeichert.", "success")
         # Zurück zum gleichen Filter
         zurueck_kat = request.form.get("zurueck_kat", "") or None
@@ -654,19 +767,37 @@ def produkt_bearbeiten(id):
     # GET – Filter für Rücksprung merken
     zurueck_kat = request.args.get("zurueck_kat", "")
     zurueck_ort = request.args.get("zurueck_ort", "")
-    # Gebinde-Wert direkt per SQL laden
+    # Gebinde + Frost-Felder direkt per SQL laden
     try:
         with db.engine.connect() as conn:
-            row = conn.execute(db.text("SELECT gebinde FROM produkt WHERE id=:id"), {"id": id}).fetchone()
-            p.gebinde_wert = int(row[0] or 0) if row else 0
-    except:
+            row = conn.execute(db.text("SELECT gebinde, eingefroren, einfrierdatum, herkunft FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+        p.gebinde_wert = int(row[0] or 0) if row else 0
+        _eingefroren_flag = bool(row[1]) if row else False
+        p.einfrierdatum = None
+        if row and row[2]:
+            try:
+                p.einfrierdatum = datetime.strptime(str(row[2])[:10], "%Y-%m-%d").date()
+            except ValueError:
+                p.einfrierdatum = None
+        p.herkunft = (row[3] or "") if row else ""
+    except Exception:
         p.gebinde_wert = 0
+        _eingefroren_flag = False
+        p.einfrierdatum = None
+        p.herkunft = ""
+    # Checkbox zeigt den sichtbaren Zustand: Flag ODER Frost-Lagerort
+    p.ist_eingefroren = _eingefroren_flag or bool(p.lagerort and p.lagerort in frost_lagerorte())
     return render_template("produkt_form.html", produkt=p,
                            zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort,
                            lagerorte=stammdaten_liste("lagerort"),
                            kategorien=stammdaten_liste("kategorie"),
                            einheiten=stammdaten_liste("einheit"),
-                           frost_orte=sorted(frost_lagerorte()))
+                           frost_orte=sorted(frost_lagerorte()),
+                           richtwerte=EINFRIER_RICHTWERT,
+                           herkunft_optionen=HERKUNFT_OPTIONEN,
+                           heute=date.today().isoformat(),
+                           vb_default=monate_addieren(date.today(), 12).isoformat(),
+                           frost_vorwahl=False)
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
@@ -725,73 +856,21 @@ def produkt_loeschen(id):
     ort = request.args.get("lagerort") or None
     return redirect(url_for("index", kategorie=kat, lagerort=ort))
 
-@app.route("/einfrieren", methods=["GET", "POST"])
-def einfrieren():
-    """Eigener Dialog zum Einfrieren von Resten/Garten-Ernte -> Tiefkühl-Produkt."""
-    heute = date.today()
-    if request.method == "POST":
-        name = request.form.get("name", "").strip()
-        if not name:
-            flash("Bitte einen Namen angeben.", "danger")
-            return redirect(url_for("einfrieren"))
-        try:
-            menge = float(request.form.get("menge", 1) or 1)
-        except ValueError:
-            menge = 1
-        einheit = request.form.get("einheit", "Portionen") or "Portionen"
-        lagerort = request.form.get("lagerort", "").strip()
-        herkunft = request.form.get("herkunft", "").strip()
-        notiz = request.form.get("notiz", "").strip()
-        ef_str = request.form.get("einfrierdatum")
-        try:
-            einfrierdatum = datetime.strptime(ef_str, "%Y-%m-%d").date() if ef_str else heute
-        except ValueError:
-            einfrierdatum = heute
-        vb_str = request.form.get("verbrauchen_bis")
-        try:
-            mhd = datetime.strptime(vb_str, "%Y-%m-%d").date() if vb_str else monate_addieren(einfrierdatum, 12)
-        except ValueError:
-            mhd = monate_addieren(einfrierdatum, 12)
-        p = Produkt(name=name, menge=menge, einheit=einheit, mindestmenge=0,
-                    lagerort=lagerort, kategorie="Tiefkühl", mhd=mhd, notiz=notiz)
-        db.session.add(p)
-        db.session.commit()
-        # Tiefkühl-Felder per Raw-SQL (nicht im ORM), wie gebinde/angebrochen
-        with db.engine.connect() as conn:
-            conn.execute(db.text(
-                "UPDATE produkt SET eingefroren=1, einfrierdatum=:ef, herkunft=:hk WHERE id=:id"),
-                {"ef": einfrierdatum.isoformat(), "hk": herkunft, "id": p.id})
-            conn.commit()
-        stammdaten_sicherstellen("lagerort", lagerort)
-        stammdaten_sicherstellen("kategorie", "Tiefkühl")
-        stammdaten_sicherstellen("einheit", einheit)
-        db.session.commit()
-        if lagerort:
-            lagerort_frost_setzen(lagerort, True)  # Einfrier-Ziel automatisch als Frost markieren
-        flash(f"'{name}' eingefroren ({herkunft or 'Vorrat'}).", "success")
-        return redirect(url_for("index"))
-    return render_template("einfrieren.html",
-                           heute=heute.isoformat(),
-                           verbrauchen_bis=monate_addieren(heute, 12).isoformat(),
-                           richtwerte=EINFRIER_RICHTWERT,
-                           herkunft_optionen=HERKUNFT_OPTIONEN,
-                           frost_orte=sorted(frost_lagerorte()),
-                           lagerorte=stammdaten_liste("lagerort"),
-                           einheiten=stammdaten_liste("einheit"))
-
 @app.route("/produkt/<int:id>/tiefkuehl", methods=["POST"])
 def produkt_tiefkuehl(id):
     """Tiefkühl-Angaben (Einfrierdatum, Verbrauchen bis = mhd, Herkunft) bearbeiten."""
     p = Produkt.query.get_or_404(id)
     herkunft = request.form.get("herkunft", "").strip()
-    vb_str = request.form.get("verbrauchen_bis")
+    vb_str = (request.form.get("verbrauchen_bis") or "").strip()
     if vb_str:
         try:
             p.mhd = datetime.strptime(vb_str, "%Y-%m-%d").date()
         except ValueError:
             pass
+    else:
+        p.mhd = None  # Feld geleert = kein "Verbrauchen bis" mehr
     db.session.commit()
-    ef_str = request.form.get("einfrierdatum")
+    ef_str = (request.form.get("einfrierdatum") or "").strip()
     with db.engine.connect() as conn:
         conn.execute(db.text("UPDATE produkt SET herkunft=:hk WHERE id=:id"), {"hk": herkunft, "id": id})
         if ef_str:
@@ -801,6 +880,8 @@ def produkt_tiefkuehl(id):
                              {"ef": ef.isoformat(), "id": id})
             except ValueError:
                 pass
+        else:
+            conn.execute(db.text("UPDATE produkt SET einfrierdatum=NULL WHERE id=:id"), {"id": id})
         conn.commit()
     flash("Tiefkühl-Angaben gespeichert.", "success")
     return redirect(url_for("produkt_detail", id=id))
@@ -816,7 +897,7 @@ def render_produkt_detail(id, **extra):
         p.ist_angebrochen = bool(row[0]) if row else False
         p.gebinde_wert = int(row[1] or 0) if row else 0
         p.anbruch_prozent = int(row[2]) if (row and row[2] is not None) else 100
-        p.ist_eingefroren = bool(row[3]) if row else False
+        p.ist_eingefroren = (bool(row[3]) if row else False) or bool(p.lagerort and p.lagerort in frost_lagerorte())
         p.einfrierdatum = None
         if row and row[4]:
             try:
@@ -1023,13 +1104,22 @@ def produkt_off_import(id):
     bild_ok = True
     if daten["bild_url"]:
         try:
-            ir = requests.get(daten["bild_url"], headers=HEADERS, timeout=(4, 12))
+            ir = requests.get(daten["bild_url"], headers=HEADERS, timeout=(4, 12), stream=True)
             ir.raise_for_status()
+            # Größe begrenzen: MAX_CONTENT_LENGTH schützt nur Uploads, nicht diesen Download
+            angekuendigt = ir.headers.get("Content-Length")
+            if angekuendigt and int(angekuendigt) > MAX_BILD_BYTES:
+                raise ValueError("Bild zu groß")
+            inhalt = b""
+            for stueck in ir.iter_content(8192):
+                inhalt += stueck
+                if len(inhalt) > MAX_BILD_BYTES:
+                    raise ValueError("Bild zu groß")
             m = re.search(r"\.(jpg|jpeg|png|gif|webp)(?:\.|\?|$)", daten["bild_url"], re.I)
             ext = (m.group(1).lower() if m else "jpg")
             dateiname = f"produkt_{id}.{ext}"
             with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
-                f.write(ir.content)
+                f.write(inhalt)
             for e in ERLAUBTE_BILD_EXT:
                 if e != ext:
                     alt = os.path.join(BILDER_DIR, f"produkt_{id}.{e}")
@@ -1052,7 +1142,10 @@ def produkt_off_import(id):
 def menge_anpassen(id):
     p = Produkt.query.get_or_404(id)
     aktion = request.form.get("aktion")
-    wert = float(request.form.get("wert", 1))
+    try:
+        wert = float(request.form.get("wert", 1) or 1)
+    except (TypeError, ValueError):
+        wert = 1
     if aktion == "erhoehen":
         p.menge += wert
     elif aktion == "verringern":
@@ -2579,7 +2672,10 @@ def ha_sensoren_aktualisieren():
                     # Tiefkühl-Bestand (eingefrorene Produkte) – Raw-SQL, da nicht im ORM
                     try:
                         _c = sqlite3.connect(DB_PATH)
-                        tiefkuehl = _c.execute("SELECT COUNT(*) FROM produkt WHERE eingefroren=1").fetchone()[0]
+                        tiefkuehl = _c.execute(
+                            "SELECT COUNT(*) FROM produkt WHERE eingefroren=1 "
+                            "OR lagerort IN (SELECT name FROM stammdaten WHERE typ='lagerort' AND ist_frost=1)"
+                        ).fetchone()[0]
                         _c.close()
                     except Exception:
                         tiefkuehl = 0

@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.1
+**Aktuelle Version:** 1.6.2
 
 ---
 
@@ -99,6 +99,13 @@ Die App läuft hinter HA Ingress (Pfad-Prefix).
 Lösung: ReverseProxied Middleware + immer url_for() nutzen,
 nie hardcodierte Pfade!
 
+### CSRF-Schutz
+Token pro Session (`csrf_token()`). `before_request` prüft POST/PUT/PATCH/DELETE;
+`after_request` injiziert automatisch ein `<input name="_csrf">` in jedes POST-Formular –
+kein Template muss es selbst setzen. AJAX/JSON sendet es per `X-CSRF-Token`-Header
+(Meta-Tag in base.html). `SECRET_KEY`: ENV oder persistenter Zufallsschlüssel
+(`.secret_key` neben der DB), kein hartkodierter Default.
+
 ### Gebinde-Funktion
 Produkte können eine Gebindegröße haben (z.B. 12 für 12er-Kiste).
 In der Übersicht: zwei Stepper (Kiste und Einzeln).
@@ -121,13 +128,15 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
   - Route /produkt/<id>/anbruch (aktion=start/stop/set); unter 15 % → menge-1, angebrochen=0
   - farbige Füll-Div (orange, <15 % rot), Slider transparent darüber (WebKit-tauglich)
 - Einfrieren / Tiefkühl (❄️): Reste/Garten-Ernte als Tiefkühl-Produkt
-  - Route /einfrieren (Dialog); kategorie=Tiefkühl, mhd = Einfrierdatum + Richtwert
-    (monate_addieren, EINFRIER_RICHTWERT, Standard 12 Monate)
+  - Im Produktformular (produkt_neu/bearbeiten): ❄️-Schalter "Eingefroren" blendet
+    Herkunft/Art/Einfrierdatum/Verbrauchen-bis ein (frost_effektives_mhd, frost_felder_speichern);
+    eigener /einfrieren-Dialog entfernt, Button → /produkt/neu?frost=1
+  - mhd = "Verbrauchen bis" = Einfrierdatum + Richtwert (monate_addieren, EINFRIER_RICHTWERT, Std. 12 Monate)
   - Spalten eingefroren/einfrierdatum/herkunft; Herkunft-Filter + ❄️-Badge in der Übersicht
+  - eingefroren = Flag ODER Lagerort ist Gefrierfach (abgeleitet; Übersicht/Detail/Sensor)
   - Tiefkühl-Karte auf der Produktseite: Route /produkt/<id>/tiefkuehl
-  - Lagerorte als Gefrierfach markierbar (Stammdaten.ist_frost, Route /stammdaten/frost);
-    Einfrieren-Dialog zeigt nur Frost-Lagerorte, neue Orte werden auto-markiert
-  - Sensor sensor.vorrat_tiefkuehl (Anzahl eingefrorener Produkte)
+  - Lagerorte als Gefrierfach markierbar (Stammdaten.ist_frost, Route /stammdaten/frost)
+  - Sensor sensor.vorrat_tiefkuehl (eingefroren ODER Frost-Lagerort)
 - Gebinde-Funktion (Kisten, Pakete) mit zwei Steppern
 - Nullbestände automatisch ans Ende sortiert
 - Mehrere Einkaufslisten mit Drag & Drop

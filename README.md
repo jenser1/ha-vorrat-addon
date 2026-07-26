@@ -116,6 +116,12 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
+### 1.6.2
+- 🔒 **Sicherheit**: CSRF-Schutz für alle Formulare; zufälliger, persistenter SECRET_KEY (kein fester Default); Open-Food-Facts-Bilddownload auf 5 MB begrenzt (gestreamt)
+- 🧊 **Tiefkühl automatisch**: Produkte in einem als ❄️-Gefrierfach markierten Lagerort bekommen das Frost-Symbol automatisch – auch bereits vorhandene
+- 🧩 **Ein Formular**: Anlegen, Bearbeiten und Einfrieren zusammengefasst – im Produktformular ein ❄️-Schalter „Eingefroren"; der separate Einfrieren-Dialog entfällt
+- 🩹 **Fixes**: ❄️-Markierung bleibt beim Umbenennen eines Lagerorts erhalten; „Verbrauchen bis" lässt sich leeren; keine Server-Fehler mehr bei ungültiger Mengeneingabe
+
 ### 1.6.1
 - ❄️ **Einfrieren-Dialog**: Reste/Garten-Ernte als Tiefkühl-Produkt anlegen (Portionen, Herkunft, Einfrierdatum)
 - ⏱️ **„Verbrauchen bis" automatisch** aus Einfrierdatum + Richtwert (Standard 1 Jahr, je Art anpassbar) – zählt in die MHD-Warnungen

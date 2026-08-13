@@ -9,7 +9,7 @@
   </div>
 
   <form method="post">
-    {% set frost_checked = (produkt and produkt.ist_eingefroren) or frost_vorwahl %}
+    {% set konserv_sel = (produkt.konserv_methode if produkt else '') or konserv_vorwahl %}
     <input type="hidden" name="zurueck_kat" value="{{ zurueck_kat or '' }}">
     <input type="hidden" name="zurueck_ort" value="{{ zurueck_ort or '' }}">
     <div class="form-grid">
@@ -66,7 +66,7 @@
         </select>
       </div>
 
-      <div class="form-group" id="mhd-group" {% if frost_checked %}style="display:none;"{% endif %}>
+      <div class="form-group" id="mhd-group" {% if konserv_sel %}style="display:none;"{% endif %}>
         <label>Mindesthaltbarkeitsdatum</label>
         <input type="date" name="mhd"
           value="{{ produkt.mhd.strftime('%Y-%m-%d') if produkt and produkt.mhd else '' }}">
@@ -89,16 +89,17 @@
         {% endif %}
       </div>
 
-      <!-- ❄️ Einfrieren (Tiefkühl) -->
+      <!-- Konservierung: Einfrieren / Einkochen -->
       <div class="form-group" style="grid-column: 1 / -1; border-top:1px solid var(--border); padding-top:14px; margin-top:4px;">
-        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600;">
-          <input type="checkbox" name="eingefroren" id="frost-toggle" value="1"
-                 {{ 'checked' if frost_checked }} onchange="frostUmschalten()" style="width:auto;">
-          ❄️ Eingefroren (Tiefkühl)
-        </label>
-        <span style="font-size:0.72rem; color:var(--muted);">Ersetzt das MHD durch „Verbrauchen bis" (automatisch aus dem Einfrierdatum).</span>
+        <label style="font-weight:600;">Konservierung</label>
+        <select name="konservierung" id="konserv-methode" onchange="konservUmschalten()">
+          <option value="" {{ 'selected' if not konserv_sel }}>Keine</option>
+          <option value="eingefroren" {{ 'selected' if konserv_sel == 'eingefroren' }}>❄️ Eingefroren (Tiefkühl)</option>
+          <option value="eingekocht" {{ 'selected' if konserv_sel == 'eingekocht' }}>🥫 Eingekocht</option>
+        </select>
+        <span style="font-size:0.72rem; color:var(--muted);">Ersetzt das MHD durch „Verbrauchen bis" (automatisch aus dem Datum).</span>
       </div>
-      <div id="frost-felder" style="grid-column:1/-1; {% if not frost_checked %}display:none;{% endif %}">
+      <div id="konserv-felder" style="grid-column:1/-1; {% if not konserv_sel %}display:none;{% endif %}">
         <div class="form-grid">
           <div class="form-group">
             <label>Herkunft</label>
@@ -110,22 +111,33 @@
             </select>
           </div>
           <div class="form-group">
-            <label>Art <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(Haltbarkeit)</span></label>
-            <select id="frost-art" onchange="frostBerechnen()">
-              {% for a, m in (richtwerte or {}).items() %}
-                <option value="{{ a }}" data-monate="{{ m }}" {{ 'selected' if a == 'Sonstiges' }}>{{ a }} ({{ m }} Mon.)</option>
-              {% endfor %}
-            </select>
+            <label>Aufbewahrt in <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(Behälter)</span></label>
+            <input type="text" name="behaelter" list="behaelter-liste" autocomplete="off"
+                   value="{{ produkt.behaelter if produkt and produkt.behaelter else '' }}"
+                   placeholder="z. B. Gefrierbeutel, Weckglas…">
+            <datalist id="behaelter-liste">
+              <option value="Gefrierbeutel"><option value="Gefrierdose"><option value="Vakuumbeutel"><option value="Weckglas"><option value="Schraubglas"><option value="Flasche"><option value="Glas"><option value="Eiswürfelform"><option value="Alufolie">
+            </datalist>
           </div>
           <div class="form-group">
-            <label>Eingefroren am</label>
-            <input type="date" name="einfrierdatum" id="frost-datum" onchange="frostBerechnen()"
-                   value="{{ produkt.einfrierdatum.strftime('%Y-%m-%d') if produkt and produkt.einfrierdatum else heute }}">
+            <label>Kennzeichnung <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(zum Wiedererkennen)</span></label>
+            <input type="text" name="markierung" maxlength="30"
+                   value="{{ produkt.markierung if produkt and produkt.markierung else '' }}"
+                   placeholder="z. B. A3, 12, B…">
+          </div>
+          <div class="form-group">
+            <label>Art <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(Haltbarkeit)</span></label>
+            <select id="konserv-art" onchange="konservBerechnen()"></select>
+          </div>
+          <div class="form-group">
+            <label id="konserv-datum-label">Datum</label>
+            <input type="date" name="konserv_datum" id="konserv-datum" onchange="konservBerechnen()"
+                   value="{{ produkt.konserv_datum.strftime('%Y-%m-%d') if produkt and produkt.konserv_datum else heute }}">
           </div>
           <div class="form-group">
             <label>Verbrauchen bis <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(auto)</span></label>
-            <input type="date" name="verbrauchen_bis" id="frost-vb"
-                   value="{{ produkt.mhd.strftime('%Y-%m-%d') if frost_checked and produkt and produkt.mhd else vb_default }}">
+            <input type="date" name="verbrauchen_bis" id="konserv-vb"
+                   value="{{ produkt.mhd.strftime('%Y-%m-%d') if konserv_sel and produkt and produkt.mhd else vb_default }}">
           </div>
         </div>
       </div>
@@ -141,12 +153,8 @@
 </div>
 
 <script>
-function frostUmschalten() {
-  var an = document.getElementById('frost-toggle').checked;
-  document.getElementById('frost-felder').style.display = an ? '' : 'none';
-  var mhd = document.getElementById('mhd-group');
-  if (mhd) mhd.style.display = an ? 'none' : '';
-}
+var RICHT = { eingefroren: {{ richtwerte | tojson }}, eingekocht: {{ einkoch_richtwerte | tojson }} };
+var DATUM_LABEL = { eingefroren: 'Eingefroren am', eingekocht: 'Eingekocht am' };
 function monatePlus(datumStr, n) {
   var t = datumStr.split('-');
   if (t.length !== 3) return datumStr;
@@ -159,13 +167,45 @@ function monatePlus(datumStr, n) {
   if (tag > letzterTag) tag = letzterTag;
   return jahr + '-' + ('0' + (monat + 1)).slice(-2) + '-' + ('0' + tag).slice(-2);
 }
-function frostBerechnen() {
-  var ef = document.getElementById('frost-datum');
-  var art = document.getElementById('frost-art');
-  var vb = document.getElementById('frost-vb');
-  if (!ef || !art || !vb || !ef.value) return;
+function konservArtFuellen() {
+  var m = document.getElementById('konserv-methode').value;
+  var sel = document.getElementById('konserv-art');
+  if (!sel) return;
+  var tab = RICHT[m] || {};
+  sel.innerHTML = '';
+  for (var k in tab) {
+    var o = document.createElement('option');
+    o.value = k; o.setAttribute('data-monate', tab[k]);
+    o.textContent = k + ' (' + tab[k] + ' Mon.)';
+    if (k === 'Sonstiges') o.selected = true;
+    sel.appendChild(o);
+  }
+}
+function konservBerechnen() {
+  var ef = document.getElementById('konserv-datum');
+  var art = document.getElementById('konserv-art');
+  var vb = document.getElementById('konserv-vb');
+  if (!ef || !art || !vb || !ef.value || art.selectedIndex < 0) return;
   var monate = art.options[art.selectedIndex].getAttribute('data-monate') || 12;
   vb.value = monatePlus(ef.value, monate);
 }
+function konservUmschalten() {
+  var m = document.getElementById('konserv-methode').value;
+  var an = (m === 'eingefroren' || m === 'eingekocht');
+  document.getElementById('konserv-felder').style.display = an ? '' : 'none';
+  var mhd = document.getElementById('mhd-group');
+  if (mhd) mhd.style.display = an ? 'none' : '';
+  var lab = document.getElementById('konserv-datum-label');
+  if (lab) lab.textContent = DATUM_LABEL[m] || 'Datum';
+  if (an) { konservArtFuellen(); konservBerechnen(); }
+}
+function konservInit() {
+  var m = document.getElementById('konserv-methode');
+  if (!m) return;
+  var lab = document.getElementById('konserv-datum-label');
+  if (lab) lab.textContent = DATUM_LABEL[m.value] || 'Datum';
+  if (m.value === 'eingefroren' || m.value === 'eingekocht') konservArtFuellen();
+}
+document.addEventListener('DOMContentLoaded', konservInit);
 </script>
 {% endblock %}

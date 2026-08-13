@@ -457,6 +457,11 @@ EINFRIER_RICHTWERT = {
     "Gemüse": 12, "Obst": 12, "Fleisch": 6, "Fisch": 3,
     "Gekochtes/Reste": 3, "Backwaren": 3, "Kräuter": 12, "Sonstiges": 12,
 }
+# Richtwerte Einkoch-Haltbarkeit in Monaten (Standard 12 = 1 Jahr)
+EINKOCH_RICHTWERT = {
+    "Marmelade/Gelee": 24, "Kompott/Obst": 12, "Gemüse": 12, "Suppe/Eintopf": 12,
+    "Sauce/Pesto": 12, "Fleisch/Wurst": 12, "Sonstiges": 12,
+}
 HERKUNFT_OPTIONEN = ["Garten", "Reste", "Selbstgemacht", "Eingekauft"]
 
 # ── Routen: Übersicht ──────────────────────────────────────────────────────────
@@ -500,26 +505,32 @@ def index():
     # angebrochen/gebinde/eingefroren/herkunft direkt per SQL laden
     try:
         _conn = sqlite3.connect(DB_PATH)
-        _rows = _conn.execute("SELECT id, angebrochen, gebinde, eingefroren, herkunft FROM produkt").fetchall()
+        _rows = _conn.execute("SELECT id, angebrochen, gebinde, eingefroren, herkunft, markierung, eingekocht FROM produkt").fetchall()
         _conn.close()
         _angebrochen_ids = set(r[0] for r in _rows if r[1])
         _gebinde_map = {r[0]: int(r[2] or 0) for r in _rows}
         _eingefroren_ids = set(r[0] for r in _rows if r[3])
         _herkunft_map = {r[0]: (r[4] or "") for r in _rows}
+        _markierung_map = {r[0]: (r[5] or "") for r in _rows}
+        _eingekocht_ids = set(r[0] for r in _rows if r[6])
     except:
         _angebrochen_ids = set()
         _gebinde_map = {}
         _eingefroren_ids = set()
         _herkunft_map = {}
+        _markierung_map = {}
+        _eingekocht_ids = set()
 
     _frost_orte = frost_lagerorte()
     for p in produkte:
         p.mhd_status = mhd_status(p.mhd)
         p.ist_angebrochen = p.id in _angebrochen_ids
         p.gebinde_wert = _gebinde_map.get(p.id, 0)
-        # eingefroren = manuell markiert ODER liegt in einem ❄️-Gefrierfach-Lagerort
-        p.ist_eingefroren = (p.id in _eingefroren_ids) or bool(p.lagerort and p.lagerort in _frost_orte)
+        p.ist_eingekocht = p.id in _eingekocht_ids
+        # eingefroren = manuell markiert ODER ❄️-Gefrierfach-Lagerort (nicht wenn eingekocht)
+        p.ist_eingefroren = (not p.ist_eingekocht) and ((p.id in _eingefroren_ids) or bool(p.lagerort and p.lagerort in _frost_orte))
         p.herkunft = _herkunft_map.get(p.id, "")
+        p.markierung = _markierung_map.get(p.id, "")
 
     # Herkunft-Filter (Garten/Reste/…) – auf alle Produkte bezogen
     herkuenfte = sorted({v for v in _herkunft_map.values() if v})
@@ -657,9 +668,9 @@ def stammdaten_frost():
         lagerort_frost_setzen(name, name not in frost_lagerorte())
     return redirect(url_for("einstellungen") + "#verwaltung")
 
-def frost_effektives_mhd(form, standard_mhd):
-    """Bei 'eingefroren' ist 'Verbrauchen bis' das MHD, sonst das normale MHD-Feld."""
-    if not form.get("eingefroren"):
+def konserv_effektives_mhd(form, standard_mhd):
+    """Bei Konservierung (eingefroren/eingekocht) ist 'Verbrauchen bis' das MHD."""
+    if not (form.get("konservierung") or "").strip():
         return standard_mhd
     vb = (form.get("verbrauchen_bis") or "").strip()
     if not vb:
@@ -669,22 +680,35 @@ def frost_effektives_mhd(form, standard_mhd):
     except ValueError:
         return standard_mhd
 
-def frost_felder_speichern(pid, form):
-    """Schreibt eingefroren/einfrierdatum/herkunft aus dem Produktformular (Raw-SQL)."""
-    eingefroren = 1 if form.get("eingefroren") else 0
-    einfrierdatum = None
-    herkunft = ""
-    if eingefroren:
+def konservierung_felder_speichern(pid, form):
+    """Schreibt Konservierung (eingefroren/eingekocht) + Datum/Herkunft/Behälter/Kennzeichnung (Raw-SQL).
+    Methoden schließen sich aus; das Datum landet je nach Methode in einfrier-/einkochdatum."""
+    methode = (form.get("konservierung") or "").strip()   # "" | eingefroren | eingekocht
+    eingefroren = 1 if methode == "eingefroren" else 0
+    eingekocht = 1 if methode == "eingekocht" else 0
+    herkunft = behaelter = markierung = ""
+    einfrierdatum = einkochdatum = None
+    if methode in ("eingefroren", "eingekocht"):
         herkunft = (form.get("herkunft") or "").strip()
-        ef = (form.get("einfrierdatum") or "").strip()
+        behaelter = (form.get("behaelter") or "").strip()
+        markierung = (form.get("markierung") or "").strip()
+        d = (form.get("konserv_datum") or "").strip()
         try:
-            einfrierdatum = datetime.strptime(ef, "%Y-%m-%d").date() if ef else date.today()
+            datum = datetime.strptime(d, "%Y-%m-%d").date() if d else date.today()
         except ValueError:
-            einfrierdatum = date.today()
+            datum = date.today()
+        if methode == "eingefroren":
+            einfrierdatum = datum
+        else:
+            einkochdatum = datum
     with db.engine.connect() as conn:
-        conn.execute(db.text("UPDATE produkt SET eingefroren=:e, einfrierdatum=:d, herkunft=:h WHERE id=:id"),
-                     {"e": eingefroren, "d": einfrierdatum.isoformat() if einfrierdatum else None,
-                      "h": herkunft, "id": pid})
+        conn.execute(db.text(
+            "UPDATE produkt SET eingefroren=:ef, eingekocht=:ek, einfrierdatum=:efd, einkochdatum=:ekd, "
+            "herkunft=:h, behaelter=:b, markierung=:m WHERE id=:id"),
+            {"ef": eingefroren, "ek": eingekocht,
+             "efd": einfrierdatum.isoformat() if einfrierdatum else None,
+             "ekd": einkochdatum.isoformat() if einkochdatum else None,
+             "h": herkunft, "b": behaelter, "m": markierung, "id": pid})
         conn.commit()
 
 @app.route("/produkt/neu", methods=["GET", "POST"])
@@ -702,7 +726,7 @@ def produkt_neu():
             mindestmenge=float(request.form.get("mindestmenge", 1) or 1),
             lagerort=request.form.get("lagerort", ""),
             kategorie=request.form.get("kategorie", "Sonstiges"),
-            mhd=frost_effektives_mhd(request.form, standard_mhd)
+            mhd=konserv_effektives_mhd(request.form, standard_mhd)
         )
         db.session.add(p)
         db.session.commit()
@@ -717,19 +741,25 @@ def produkt_neu():
             with db.engine.connect() as conn:
                 conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": p.id})
                 conn.commit()
-        frost_felder_speichern(p.id, request.form)
+        konservierung_felder_speichern(p.id, request.form)
         flash(f"'{p.name}' wurde hinzugefügt.", "success")
         return redirect(url_for("index"))
+    _vorwahl = ""
+    if request.args.get("konserv") in ("eingefroren", "eingekocht"):
+        _vorwahl = request.args.get("konserv")
+    elif request.args.get("frost"):
+        _vorwahl = "eingefroren"
     return render_template("produkt_form.html", produkt=None,
                            lagerorte=stammdaten_liste("lagerort"),
                            kategorien=stammdaten_liste("kategorie"),
                            einheiten=stammdaten_liste("einheit"),
                            frost_orte=sorted(frost_lagerorte()),
                            richtwerte=EINFRIER_RICHTWERT,
+                           einkoch_richtwerte=EINKOCH_RICHTWERT,
                            herkunft_optionen=HERKUNFT_OPTIONEN,
                            heute=date.today().isoformat(),
                            vb_default=monate_addieren(date.today(), 12).isoformat(),
-                           frost_vorwahl=bool(request.args.get("frost")))
+                           konserv_vorwahl=_vorwahl)
 
 @app.route("/produkt/<int:id>/bearbeiten", methods=["GET", "POST"])
 def produkt_bearbeiten(id):
@@ -746,7 +776,7 @@ def produkt_bearbeiten(id):
             standard_mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
         except ValueError:
             standard_mhd = None
-        p.mhd = frost_effektives_mhd(request.form, standard_mhd)
+        p.mhd = konserv_effektives_mhd(request.form, standard_mhd)
         db.session.commit()
         # Neue Werte als Stammdaten sichern
         stammdaten_sicherstellen("lagerort", p.lagerort)
@@ -758,7 +788,7 @@ def produkt_bearbeiten(id):
         with db.engine.connect() as conn:
             conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": id})
             conn.commit()
-        frost_felder_speichern(id, request.form)
+        konservierung_felder_speichern(id, request.form)
         flash(f"'{p.name}' wurde gespeichert.", "success")
         # Zurück zum gleichen Filter
         zurueck_kat = request.form.get("zurueck_kat", "") or None
@@ -770,23 +800,44 @@ def produkt_bearbeiten(id):
     # Gebinde + Frost-Felder direkt per SQL laden
     try:
         with db.engine.connect() as conn:
-            row = conn.execute(db.text("SELECT gebinde, eingefroren, einfrierdatum, herkunft FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+            row = conn.execute(db.text("SELECT gebinde, eingefroren, einfrierdatum, herkunft, behaelter, markierung, eingekocht, einkochdatum FROM produkt WHERE id=:id"), {"id": id}).fetchone()
         p.gebinde_wert = int(row[0] or 0) if row else 0
         _eingefroren_flag = bool(row[1]) if row else False
-        p.einfrierdatum = None
+        _einfrierdatum = None
         if row and row[2]:
             try:
-                p.einfrierdatum = datetime.strptime(str(row[2])[:10], "%Y-%m-%d").date()
+                _einfrierdatum = datetime.strptime(str(row[2])[:10], "%Y-%m-%d").date()
             except ValueError:
-                p.einfrierdatum = None
+                _einfrierdatum = None
         p.herkunft = (row[3] or "") if row else ""
+        p.behaelter = (row[4] or "") if row else ""
+        p.markierung = (row[5] or "") if row else ""
+        _eingekocht_flag = bool(row[6]) if row else False
+        _einkochdatum = None
+        if row and row[7]:
+            try:
+                _einkochdatum = datetime.strptime(str(row[7])[:10], "%Y-%m-%d").date()
+            except ValueError:
+                _einkochdatum = None
     except Exception:
         p.gebinde_wert = 0
         _eingefroren_flag = False
-        p.einfrierdatum = None
+        _einfrierdatum = None
         p.herkunft = ""
-    # Checkbox zeigt den sichtbaren Zustand: Flag ODER Frost-Lagerort
-    p.ist_eingefroren = _eingefroren_flag or bool(p.lagerort and p.lagerort in frost_lagerorte())
+        p.behaelter = ""
+        p.markierung = ""
+        _eingekocht_flag = False
+        _einkochdatum = None
+    # Methode für die Auswahl (eingekocht hat Vorrang; Frost auch aus Lagerort ableitbar)
+    if _eingekocht_flag:
+        p.konserv_methode = "eingekocht"
+        p.konserv_datum = _einkochdatum
+    elif _eingefroren_flag or bool(p.lagerort and p.lagerort in frost_lagerorte()):
+        p.konserv_methode = "eingefroren"
+        p.konserv_datum = _einfrierdatum
+    else:
+        p.konserv_methode = ""
+        p.konserv_datum = None
     return render_template("produkt_form.html", produkt=p,
                            zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort,
                            lagerorte=stammdaten_liste("lagerort"),
@@ -794,10 +845,11 @@ def produkt_bearbeiten(id):
                            einheiten=stammdaten_liste("einheit"),
                            frost_orte=sorted(frost_lagerorte()),
                            richtwerte=EINFRIER_RICHTWERT,
+                           einkoch_richtwerte=EINKOCH_RICHTWERT,
                            herkunft_optionen=HERKUNFT_OPTIONEN,
                            heute=date.today().isoformat(),
                            vb_default=monate_addieren(date.today(), 12).isoformat(),
-                           frost_vorwahl=False)
+                           konserv_vorwahl="")
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
@@ -858,9 +910,11 @@ def produkt_loeschen(id):
 
 @app.route("/produkt/<int:id>/tiefkuehl", methods=["POST"])
 def produkt_tiefkuehl(id):
-    """Tiefkühl-Angaben (Einfrierdatum, Verbrauchen bis = mhd, Herkunft) bearbeiten."""
+    """Konservierungs-Angaben bearbeiten (Datum landet je nach Methode in einfrier-/einkochdatum)."""
     p = Produkt.query.get_or_404(id)
-    herkunft = request.form.get("herkunft", "").strip()
+    herkunft = (request.form.get("herkunft") or "").strip()
+    behaelter = (request.form.get("behaelter") or "").strip()
+    markierung = (request.form.get("markierung") or "").strip()
     vb_str = (request.form.get("verbrauchen_bis") or "").strip()
     if vb_str:
         try:
@@ -870,20 +924,24 @@ def produkt_tiefkuehl(id):
     else:
         p.mhd = None  # Feld geleert = kein "Verbrauchen bis" mehr
     db.session.commit()
-    ef_str = (request.form.get("einfrierdatum") or "").strip()
+    d_str = (request.form.get("konserv_datum") or "").strip()
+    datum_val = None
+    if d_str:
+        try:
+            datum_val = datetime.strptime(d_str, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            datum_val = None
     with db.engine.connect() as conn:
-        conn.execute(db.text("UPDATE produkt SET herkunft=:hk WHERE id=:id"), {"hk": herkunft, "id": id})
-        if ef_str:
-            try:
-                ef = datetime.strptime(ef_str, "%Y-%m-%d").date()
-                conn.execute(db.text("UPDATE produkt SET einfrierdatum=:ef WHERE id=:id"),
-                             {"ef": ef.isoformat(), "id": id})
-            except ValueError:
-                pass
+        r = conn.execute(db.text("SELECT eingekocht FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+        ist_eingekocht = bool(r[0]) if r else False
+        conn.execute(db.text("UPDATE produkt SET herkunft=:h, behaelter=:b, markierung=:m WHERE id=:id"),
+                     {"h": herkunft, "b": behaelter, "m": markierung, "id": id})
+        if ist_eingekocht:
+            conn.execute(db.text("UPDATE produkt SET einkochdatum=:d WHERE id=:id"), {"d": datum_val, "id": id})
         else:
-            conn.execute(db.text("UPDATE produkt SET einfrierdatum=NULL WHERE id=:id"), {"id": id})
+            conn.execute(db.text("UPDATE produkt SET einfrierdatum=:d WHERE id=:id"), {"d": datum_val, "id": id})
         conn.commit()
-    flash("Tiefkühl-Angaben gespeichert.", "success")
+    flash("Angaben gespeichert.", "success")
     return redirect(url_for("produkt_detail", id=id))
 
 def render_produkt_detail(id, **extra):
@@ -893,25 +951,40 @@ def render_produkt_detail(id, **extra):
     # angebrochen/gebinde/anbruch-% direkt per SQL (wie in der Übersicht)
     try:
         with db.engine.connect() as conn:
-            row = conn.execute(db.text("SELECT angebrochen, gebinde, angebrochen_prozent, eingefroren, einfrierdatum, herkunft FROM produkt WHERE id=:id"), {"id": id}).fetchone()
+            row = conn.execute(db.text("SELECT angebrochen, gebinde, angebrochen_prozent, eingefroren, einfrierdatum, herkunft, behaelter, markierung, eingekocht, einkochdatum FROM produkt WHERE id=:id"), {"id": id}).fetchone()
         p.ist_angebrochen = bool(row[0]) if row else False
         p.gebinde_wert = int(row[1] or 0) if row else 0
         p.anbruch_prozent = int(row[2]) if (row and row[2] is not None) else 100
-        p.ist_eingefroren = (bool(row[3]) if row else False) or bool(p.lagerort and p.lagerort in frost_lagerorte())
+        p.ist_eingekocht = bool(row[8]) if row else False
+        p.ist_eingefroren = (not p.ist_eingekocht) and ((bool(row[3]) if row else False) or bool(p.lagerort and p.lagerort in frost_lagerorte()))
         p.einfrierdatum = None
         if row and row[4]:
             try:
                 p.einfrierdatum = datetime.strptime(str(row[4])[:10], "%Y-%m-%d").date()
             except ValueError:
                 p.einfrierdatum = None
+        p.einkochdatum = None
+        if row and row[9]:
+            try:
+                p.einkochdatum = datetime.strptime(str(row[9])[:10], "%Y-%m-%d").date()
+            except ValueError:
+                p.einkochdatum = None
+        p.konserv_datum = p.einkochdatum if p.ist_eingekocht else p.einfrierdatum
         p.herkunft = (row[5] or "") if row else ""
+        p.behaelter = (row[6] or "") if row else ""
+        p.markierung = (row[7] or "") if row else ""
     except Exception:
         p.ist_angebrochen = False
         p.gebinde_wert = 0
         p.anbruch_prozent = 100
         p.ist_eingefroren = False
+        p.ist_eingekocht = False
         p.einfrierdatum = None
+        p.einkochdatum = None
+        p.konserv_datum = None
         p.herkunft = ""
+        p.behaelter = ""
+        p.markierung = ""
     p.status = mhd_status(p.mhd)
     p.tage_bis_mhd = (p.mhd - date.today()).days if p.mhd else None
     # Verwendet in Rezepten (Namens-Abgleich)
@@ -2669,16 +2742,18 @@ def ha_sensoren_aktualisieren():
                     # Einkaufsliste (offene Artikel)
                     einkauf_offen = Einkaufsliste.query.filter_by(erledigt=False).count()
 
-                    # Tiefkühl-Bestand (eingefrorene Produkte) – Raw-SQL, da nicht im ORM
+                    # Tiefkühl-/Eingekocht-Bestand – Raw-SQL, da nicht im ORM
                     try:
                         _c = sqlite3.connect(DB_PATH)
                         tiefkuehl = _c.execute(
                             "SELECT COUNT(*) FROM produkt WHERE eingefroren=1 "
                             "OR lagerort IN (SELECT name FROM stammdaten WHERE typ='lagerort' AND ist_frost=1)"
                         ).fetchone()[0]
+                        eingekocht_n = _c.execute("SELECT COUNT(*) FROM produkt WHERE eingekocht=1").fetchone()[0]
                         _c.close()
                     except Exception:
                         tiefkuehl = 0
+                        eingekocht_n = 0
 
                     # Sensor: Abgelaufen
                     sensor_setzen("sensor.vorrat_abgelaufen", len(abgelaufen), {
@@ -2740,7 +2815,15 @@ def ha_sensoren_aktualisieren():
                         "icon": "mdi:snowflake",
                     })
 
-                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min., {einkauf_offen} Einkauf offen, {tiefkuehl} TK.", flush=True)
+                    # Sensor: Eingekocht-Bestand
+                    sensor_setzen("sensor.vorrat_eingekocht", eingekocht_n, {
+                        "friendly_name": "Vorrat: Eingekocht",
+                        "unit_of_measurement": "Produkte",
+                        "state_class": "measurement",
+                        "icon": "mdi:food-variant",
+                    })
+
+                    print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min., {einkauf_offen} Einkauf offen, {tiefkuehl} TK, {eingekocht_n} EK.", flush=True)
 
             except Exception as e:
                 print(f"HA Update Fehler: {e}", flush=True)
@@ -2832,6 +2915,10 @@ def db_migrieren():
             ("eingefroren", "BOOLEAN DEFAULT 0"),
             ("einfrierdatum", "DATE"),
             ("herkunft", "VARCHAR(30) DEFAULT ''"),
+            ("behaelter", "VARCHAR(60) DEFAULT ''"),
+            ("markierung", "VARCHAR(30) DEFAULT ''"),
+            ("eingekocht", "BOOLEAN DEFAULT 0"),
+            ("einkochdatum", "DATE"),
         ]:
             if tabelle_existiert("produkt") and not spalte_existiert("produkt", spalte):
                 cur.execute(f"ALTER TABLE produkt ADD COLUMN {spalte} {typ}")

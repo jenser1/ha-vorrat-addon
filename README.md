@@ -21,7 +21,7 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **Produkt-Detailseite** (Klick auf den Namen): Bild, Nährwerte, Notiz und „verwendet in Rezepten"
 - **Bild & Nährwerte** per Foto-Upload oder automatisch über **Open Food Facts** (Namenssuche)
 - **Angebrochen-Balken**: Füllstand der offenen Packung per Schieberegler – unter 15 % wird automatisch 1 abgezogen
-- **❄️ Einfrieren**: Reste/Garten-Ernte als Tiefkühl-Vorrat erfassen – „Verbrauchen bis" automatisch (Standard 1 Jahr), Herkunft (Garten/Reste/…), Lagerorte als Gefrierfach markierbar
+- **❄️ Einfrieren & 🥫 Einkochen**: Reste/Garten-Ernte konservieren – mit Behälter, Kennzeichnung (zum Wiedererkennen), Herkunft und automatischem „Verbrauchen bis"; Lagerorte als Gefrierfach markierbar
 
 ### 🛒 Einkaufslisten
 - **Mehrere Listen** – z.B. Edeka, Aldi, Drogerie
@@ -55,6 +55,7 @@ Automatisch verfügbare HA-Sensoren:
 | `sensor.vorrat_gesamt` | Gesamtanzahl Produkte |
 | `sensor.vorrat_einkaufsliste` | Offene Artikel in Einkaufslisten |
 | `sensor.vorrat_tiefkuehl` | Anzahl eingefrorener Produkte |
+| `sensor.vorrat_eingekocht` | Anzahl eingekochter Produkte |
 
 ### 🌍 Mehrsprachig & Mehrere Währungen
 - Sprachen: Deutsch, Englisch, Französisch, Spanisch
@@ -118,6 +119,11 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.6.3
+- 🥫 **Einkochen**: Gegenstück zum Einfrieren – im Produktformular eine Auswahl „Konservierung" (Keine / ❄️ Eingefroren / 🥫 Eingekocht) mit passender Haltbarkeit (Marmelade 2 Jahre, Kompott/Gemüse 1 Jahr …)
+- 🏷️ **Behälter & Kennzeichnung**: „Aufbewahrt in" (Gefrierbeutel, Weckglas …) und eine kurze Kennzeichnung (z. B. `A3`) zum Wiedererkennen – als Pille in Übersicht und auf der Produktseite
+- 📊 Neuer Sensor `sensor.vorrat_eingekocht`
 
 ### 1.6.2
 - 🔒 **Sicherheit**: CSRF-Schutz für alle Formulare; zufälliger, persistenter SECRET_KEY (kein fester Default); Open-Food-Facts-Bilddownload auf 5 MB begrenzt (gestreamt)

@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.2
+**Aktuelle Version:** 1.6.3
 
 ---
 
@@ -53,9 +53,9 @@ ha-vorrat-addon/
 Produkt: id, name, menge, einheit, mindestmenge, lagerort,
          kategorie, mhd, angebrochen, gebinde, erstellt,
          notiz, bild, barcode, kcal, eiweiss, fett, kohlenhydrate,
-         angebrochen_prozent, eingefroren, einfrierdatum, herkunft
-         (angebrochen/gebinde/angebrochen_prozent/eingefroren/
-          einfrierdatum/herkunft: nur per Raw-SQL, nicht im ORM)
+         angebrochen_prozent, eingefroren, einfrierdatum, herkunft,
+         behaelter, markierung, eingekocht, einkochdatum
+         (alle Konservierungs-/Zusatzspalten: nur per Raw-SQL, nicht im ORM)
 
 EinkaufsListe: id, name, erstellt
 
@@ -127,16 +127,17 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Angebrochen-Balken auf der Detailseite: Füllstand-Schieberegler (angebrochen_prozent)
   - Route /produkt/<id>/anbruch (aktion=start/stop/set); unter 15 % → menge-1, angebrochen=0
   - farbige Füll-Div (orange, <15 % rot), Slider transparent darüber (WebKit-tauglich)
-- Einfrieren / Tiefkühl (❄️): Reste/Garten-Ernte als Tiefkühl-Produkt
-  - Im Produktformular (produkt_neu/bearbeiten): ❄️-Schalter "Eingefroren" blendet
-    Herkunft/Art/Einfrierdatum/Verbrauchen-bis ein (frost_effektives_mhd, frost_felder_speichern);
-    eigener /einfrieren-Dialog entfernt, Button → /produkt/neu?frost=1
-  - mhd = "Verbrauchen bis" = Einfrierdatum + Richtwert (monate_addieren, EINFRIER_RICHTWERT, Std. 12 Monate)
-  - Spalten eingefroren/einfrierdatum/herkunft; Herkunft-Filter + ❄️-Badge in der Übersicht
-  - eingefroren = Flag ODER Lagerort ist Gefrierfach (abgeleitet; Übersicht/Detail/Sensor)
-  - Tiefkühl-Karte auf der Produktseite: Route /produkt/<id>/tiefkuehl
+- Konservierung (❄️ Einfrieren / 🥫 Einkochen): Reste/Garten-Ernte haltbar machen
+  - Im Produktformular (produkt_neu/bearbeiten): Auswahl "Konservierung" (Keine/eingefroren/eingekocht)
+    blendet Herkunft/Behälter/Kennzeichnung/Art/Datum/Verbrauchen-bis ein
+    (konserv_effektives_mhd, konservierung_felder_speichern); Buttons → /produkt/neu?konserv=…
+  - mhd = "Verbrauchen bis" = Datum + Richtwert (monate_addieren; EINFRIER_RICHTWERT bzw. EINKOCH_RICHTWERT)
+  - Spalten eingefroren/einfrierdatum/eingekocht/einkochdatum/herkunft/behaelter/markierung
+  - Kennzeichnung als Pille + ❄️/🥫-Badge in der Übersicht; Herkunft-Filter
+  - eingefroren = Flag ODER Lagerort ist Gefrierfach (abgeleitet), aber nicht wenn eingekocht
+  - Konservierungs-Karte auf der Produktseite: Route /produkt/<id>/tiefkuehl (Datum je Methode)
   - Lagerorte als Gefrierfach markierbar (Stammdaten.ist_frost, Route /stammdaten/frost)
-  - Sensor sensor.vorrat_tiefkuehl (eingefroren ODER Frost-Lagerort)
+  - Sensoren sensor.vorrat_tiefkuehl + sensor.vorrat_eingekocht
 - Gebinde-Funktion (Kisten, Pakete) mit zwei Steppern
 - Nullbestände automatisch ans Ende sortiert
 - Mehrere Einkaufslisten mit Drag & Drop

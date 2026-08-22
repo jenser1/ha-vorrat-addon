@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.3
+**Aktuelle Version:** 1.6.4
 
 ---
 
@@ -144,8 +144,13 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Einzelpreis × Menge Berechnung
 - Alle erledigten in Vorrat buchen (einzeln oder alle auf einmal)
 - Rezeptverwaltung mit Vorrat-Abgleich
+- Kochmodus: Vollbild-Overlay auf der Rezeptseite (rezept_detail.html), Schritt für Schritt
+  (Anleitung wird clientseitig in Schritte geparst), Fortschritt, einblendbare Zutaten,
+  Wake Lock (Bildschirm an), Tastatur ← → / Esc – reines JS/CSS, kein Server-Code
 - PDF-Import mit Spalten-Erkennung (Kaufland-Format)
 - Web-Import via Schema.org (Chefkoch, Kaufland, etc.)
+  - HEADERS ohne "br" (Brotli): requests dekodiert nur gzip/deflate ohne Zusatzpaket,
+    sonst kommt Binärmüll zurück und der Import scheitert ("Kein Rezept gefunden")
 - Kaufland-spezifischer Parser
 - Quell-URL beim Web-Import gespeichert
 - 4 Sprachen: DE, EN, FR, ES
@@ -199,6 +204,7 @@ DB_PATH=/tmp/vorrat.db python app.py
 | Kein Log bei Button-Klick | JS-Fehler | Kein `const` in Funktionen, `var` nutzen |
 | Internal Server Error | Jinja-Block fehlt | {% endblock %} prüfen |
 | Build-Fehler | config.yaml doppelt | Duplikate entfernen |
+| Web-Import „Kein Rezept gefunden" | Brotli-Antwort (br) nicht dekodierbar | Kein `br` in Accept-Encoding (nur gzip/deflate) |
 
 ---
 

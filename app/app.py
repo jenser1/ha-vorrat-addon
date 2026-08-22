@@ -1693,7 +1693,9 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Kein "br" (Brotli): requests dekodiert nur gzip/deflate ohne Zusatzpaket.
+    # Sonst liefert z.B. Chefkoch Content-Encoding: br -> resp.text ist Binärmüll -> Import scheitert.
+    "Accept-Encoding": "gzip, deflate",
     "DNT": "1",
     "Upgrade-Insecure-Requests": "1",
 }

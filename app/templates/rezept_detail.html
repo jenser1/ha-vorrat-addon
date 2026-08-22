@@ -3,6 +3,9 @@
 {% block page_title %}{{ rezept.name }}{% endblock %}
 
 {% block topbar_actions %}
+  {% if rezept.anleitung %}
+  <button type="button" class="btn btn-primary" onclick="kochmodusOeffnen()" style="margin-right:8px;">👨‍🍳 Kochmodus</button>
+  {% endif %}
   <button type="button" class="btn btn-primary" onclick="essensplanOeffnen()">📅 Zum Essensplan</button>
   <a href="{{ url_for('rezept_bearbeiten', id=rezept.id) }}" class="btn btn-ghost" style="margin-left:8px;">✏️ Bearbeiten</a>
   <form method="post" action="{{ url_for('rezept_loeschen', id=rezept.id) }}" style="display:inline"
@@ -146,5 +149,198 @@ document.getElementById('essensplan-modal').addEventListener('click', function(e
   if (e.target === this) essensplanSchliessen();
 });
 </script>
+
+{% if rezept.anleitung %}
+<!-- ===== Kochmodus (Vollbild) ===== -->
+<style>
+  .kochmodus{ position:fixed; inset:0; z-index:3000; background:var(--bg); color:var(--text);
+              display:none; flex-direction:column; }
+  .kochmodus.offen{ display:flex; }
+  .koch-head{ display:flex; align-items:center; justify-content:space-between; gap:12px;
+              padding:14px 18px; border-bottom:1px solid var(--border); }
+  .koch-titel{ font-size:1.05rem; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .koch-close{ flex:none; width:44px; height:44px; border-radius:12px; border:1px solid var(--border);
+               background:var(--card); color:var(--text); font-size:1.25rem; line-height:1; cursor:pointer; }
+  .koch-close:active{ opacity:0.7; }
+  .koch-progress{ height:6px; background:var(--border); }
+  .koch-progress-fill{ height:100%; width:0; background:var(--primary); transition:width 0.25s ease; }
+  .koch-body{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:16px;
+              padding:26px 22px; overflow-y:auto; text-align:center; }
+  .koch-schrittnr{ font-size:0.9rem; font-weight:700; color:var(--primary);
+                   letter-spacing:0.05em; text-transform:uppercase; }
+  .koch-schritt{ font-size:clamp(1.35rem, 4.6vw, 2.25rem); line-height:1.5; font-weight:500;
+                 max-width:820px; margin:0 auto; white-space:pre-wrap; }
+  .koch-zutaten{ border-top:1px solid var(--border); background:var(--card);
+                 max-height:36vh; overflow-y:auto; padding:14px 18px; }
+  .koch-zutaten-titel{ font-size:0.8rem; font-weight:700; color:var(--muted);
+                       text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px; text-align:center; }
+  .koch-zutaten-liste{ display:flex; flex-direction:column; gap:8px; max-width:560px; margin:0 auto; }
+  .koch-zutat{ display:flex; gap:12px; align-items:baseline; font-size:1.02rem; }
+  .koch-zutat-menge{ flex:none; min-width:88px; text-align:right; font-weight:700; color:var(--primary); }
+  .koch-zutat-name{ color:var(--text); }
+  .koch-foot{ display:flex; gap:10px; padding:12px 16px; border-top:1px solid var(--border); background:var(--card); }
+  .koch-nav{ flex:1; min-height:58px; font-size:1.05rem; font-weight:700; }
+  .koch-zutaten-btn{ flex:none; min-height:58px; font-size:1.3rem; padding:0 16px; }
+  .koch-nav:disabled{ opacity:0.4; }
+</style>
+
+<div id="kochmodus" class="kochmodus" aria-hidden="true">
+  <div class="koch-head">
+    <div class="koch-titel">👨‍🍳 {{ rezept.name }}</div>
+    <button type="button" class="koch-close" onclick="kochmodusSchliessen()" aria-label="Kochmodus schließen">✕</button>
+  </div>
+  <div class="koch-progress"><div id="koch-progress-fill" class="koch-progress-fill"></div></div>
+  <div class="koch-body">
+    <div id="koch-schrittnr" class="koch-schrittnr"></div>
+    <div id="koch-schritt" class="koch-schritt"></div>
+  </div>
+  {% if abgleich %}
+  <div id="koch-zutaten" class="koch-zutaten" hidden>
+    <div class="koch-zutaten-titel">🧺 Zutaten</div>
+    <div class="koch-zutaten-liste">
+      {% for a in abgleich %}
+      {% set m = a.zutat.menge %}
+      <div class="koch-zutat">
+        <span class="koch-zutat-menge">{{ m|int if m == m|int else m }} {{ a.zutat.einheit }}</span>
+        <span class="koch-zutat-name">{{ a.zutat.name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  <div class="koch-foot">
+    <button type="button" id="koch-zurueck" class="btn btn-ghost koch-nav" onclick="kochSchritt(-1)">◀ Zurück</button>
+    {% if abgleich %}
+    <button type="button" class="btn btn-ghost koch-zutaten-btn" onclick="kochZutatenToggle()" aria-label="Zutaten anzeigen">🧺</button>
+    {% endif %}
+    <button type="button" id="koch-weiter" class="btn btn-primary koch-nav" onclick="kochSchritt(1)">Weiter ▶</button>
+  </div>
+</div>
+
+<script>
+var KOCH_ANLEITUNG = {{ rezept.anleitung|tojson }};
+var kochSchritte = [];
+var kochIndex = 0;
+var kochOffen = false;
+var kochWakeLock = null;
+
+function kochSchritteBauen(text){
+  if(!text){ return []; }
+  var zeilen = text.split(/\r?\n/);
+  var out = [];
+  var i, z;
+  for(i = 0; i < zeilen.length; i++){
+    z = zeilen[i].replace(/^\s+|\s+$/g, '');
+    if(!z){ continue; }
+    z = z.replace(/^\d+\s*[.):\-]\s*/, '');
+    if(z){ out.push(z); }
+  }
+  if(out.length <= 1 && text.replace(/\s+/g, ' ').length > 180){
+    var saetze = text.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+/g);
+    if(saetze && saetze.length > 1){
+      out = [];
+      for(i = 0; i < saetze.length; i++){
+        z = saetze[i].replace(/^\s+|\s+$/g, '');
+        if(z){ out.push(z); }
+      }
+    }
+  }
+  return out;
+}
+
+function kochRender(){
+  var el = document.getElementById('koch-schritt');
+  var nr = document.getElementById('koch-schrittnr');
+  var fill = document.getElementById('koch-progress-fill');
+  var zurueck = document.getElementById('koch-zurueck');
+  var weiter = document.getElementById('koch-weiter');
+  var gesamt = kochSchritte.length;
+  if(gesamt === 0){
+    nr.textContent = '';
+    el.textContent = 'Keine Zubereitung hinterlegt.';
+    if(zurueck){ zurueck.disabled = true; }
+    weiter.textContent = '✅ Fertig';
+    fill.style.width = '100%';
+    return;
+  }
+  if(kochIndex < 0){ kochIndex = 0; }
+  if(kochIndex > gesamt - 1){ kochIndex = gesamt - 1; }
+  nr.textContent = 'Schritt ' + (kochIndex + 1) + ' / ' + gesamt;
+  el.textContent = kochSchritte[kochIndex];
+  fill.style.width = Math.round((kochIndex + 1) / gesamt * 100) + '%';
+  if(zurueck){ zurueck.disabled = (kochIndex === 0); }
+  weiter.textContent = (kochIndex === gesamt - 1) ? '✅ Fertig' : 'Weiter ▶';
+  var body = document.querySelector('#kochmodus .koch-body');
+  if(body){ body.scrollTop = 0; }
+}
+
+function kochSchritt(delta){
+  var gesamt = kochSchritte.length;
+  if(delta > 0 && (gesamt === 0 || kochIndex >= gesamt - 1)){
+    kochmodusSchliessen();
+    return;
+  }
+  kochIndex += delta;
+  kochRender();
+}
+
+function kochmodusOeffnen(){
+  kochSchritte = kochSchritteBauen(KOCH_ANLEITUNG);
+  kochIndex = 0;
+  var ov = document.getElementById('kochmodus');
+  if(!ov){ return; }
+  ov.classList.add('offen');
+  ov.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  kochOffen = true;
+  kochRender();
+  kochWakeLockAn();
+}
+
+function kochmodusSchliessen(){
+  var ov = document.getElementById('kochmodus');
+  if(ov){ ov.classList.remove('offen'); ov.setAttribute('aria-hidden', 'true'); }
+  var z = document.getElementById('koch-zutaten');
+  if(z){ z.hidden = true; }
+  document.body.style.overflow = '';
+  kochOffen = false;
+  kochWakeLockAus();
+}
+
+function kochZutatenToggle(){
+  var z = document.getElementById('koch-zutaten');
+  if(z){ z.hidden = !z.hidden; }
+}
+
+function kochWakeLockAn(){
+  try{
+    if('wakeLock' in navigator){
+      navigator.wakeLock.request('screen').then(function(wl){
+        kochWakeLock = wl;
+        wl.addEventListener('release', function(){ kochWakeLock = null; });
+      }).catch(function(){});
+    }
+  }catch(e){}
+}
+
+function kochWakeLockAus(){
+  try{ if(kochWakeLock){ kochWakeLock.release(); kochWakeLock = null; } }catch(e){}
+}
+
+document.addEventListener('visibilitychange', function(){
+  if(kochOffen && document.visibilityState === 'visible' && !kochWakeLock){ kochWakeLockAn(); }
+});
+document.addEventListener('keydown', function(e){
+  if(!kochOffen){ return; }
+  if(e.key === 'Escape'){ kochmodusSchliessen(); }
+  else if(e.key === 'ArrowRight'){ kochSchritt(1); }
+  else if(e.key === 'ArrowLeft'){ kochSchritt(-1); }
+});
+document.addEventListener('DOMContentLoaded', function(){
+  var ov = document.getElementById('kochmodus');
+  if(ov && ov.parentNode !== document.body){ document.body.appendChild(ov); }
+});
+</script>
+{% endif %}
 
 {% endblock %}

@@ -34,6 +34,7 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - Vorrat-Abgleich: welche Zutaten sind vorhanden?
 - **PDF-Import** mit automatischer Spalten-Erkennung
 - **Web-Import** von Chefkoch, Kaufland, Lidl und hunderten weiteren Seiten
+- **👨‍🍳 Kochmodus**: Vollbild-Ansicht Schritt für Schritt beim Kochen – große Schrift, Fortschrittsbalken, einblendbare Zutaten, Bildschirm bleibt an (Wake Lock)
 - Filter und Sortierung nach Kategorie
 
 ### 📅 Essensplaner
@@ -119,6 +120,10 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.6.4
+- 👨‍🍳 **Kochmodus**: Rezept im Vollbild Schritt für Schritt kochen – große Schrift, Fortschrittsbalken, „◀ Zurück / Weiter ▶", einblendbare Zutaten, Tastatur (← → / Esc); der Bildschirm bleibt an (Wake Lock, bei HTTPS/Nabu Casa)
+- 🐛 **Web-Import repariert**: Seiten wie Chefkoch lieferten teils Brotli-komprimierte Antworten, die nicht dekodiert werden konnten → „Kein Rezept gefunden". Brotli wird nicht mehr angefragt; Import funktioniert wieder
 
 ### 1.6.3
 - 🥫 **Einkochen**: Gegenstück zum Einfrieren – im Produktformular eine Auswahl „Konservierung" (Keine / ❄️ Eingefroren / 🥫 Eingekocht) mit passender Haltbarkeit (Marmelade 2 Jahre, Kompott/Gemüse 1 Jahr …)

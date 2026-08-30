@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.4
+**Aktuelle Version:** 1.6.5
 
 ---
 
@@ -151,6 +151,10 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Web-Import via Schema.org (Chefkoch, Kaufland, etc.)
   - HEADERS ohne "br" (Brotli): requests dekodiert nur gzip/deflate ohne Zusatzpaket,
     sonst kommt Binärmüll zurück und der Import scheitert ("Kein Rezept gefunden")
+- Text-Import (rezept_aus_text): freier Text/Caption -> Titel/Zutaten/Schritte
+  (Überschriften Zutaten:/Zubereitung:, Bullets, Nummerierung, Komma-Listen, Portionen,
+  Hashtags werden ignoriert). Route rezept_web_import nimmt "url" ODER "text",
+  gleiche editierbare Vorschau (rezept_web_import.html), speichert an rezept_neu
 - Kaufland-spezifischer Parser
 - Quell-URL beim Web-Import gespeichert
 - 4 Sprachen: DE, EN, FR, ES

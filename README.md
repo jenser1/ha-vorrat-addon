@@ -34,6 +34,7 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - Vorrat-Abgleich: welche Zutaten sind vorhanden?
 - **PDF-Import** mit automatischer Spalten-Erkennung
 - **Web-Import** von Chefkoch, Kaufland, Lidl und hunderten weiteren Seiten
+- **📋 Text-Import**: Rezept aus freiem Text einfügen (Instagram-/Facebook-Bildunterschrift, WhatsApp, Koch-App) – wird automatisch in Zutaten & Schritte zerlegt, editierbare Vorschau
 - **👨‍🍳 Kochmodus**: Vollbild-Ansicht Schritt für Schritt beim Kochen – große Schrift, Fortschrittsbalken, einblendbare Zutaten, Bildschirm bleibt an (Wake Lock)
 - Filter und Sortierung nach Kategorie
 
@@ -83,16 +84,16 @@ Automatisch verfügbare HA-Sensoren:
 
 ## 📊 Dashboard einbinden
 
+Beispiel-Karte – ergänze weitere Sensoren aus der Sensor-Tabelle oben nach Bedarf:
+
 ```yaml
 type: entities
 title: 🥫 Vorratsverwaltung
 entities:
   - sensor.vorrat_abgelaufen
   - sensor.vorrat_bald_ablaufend
-  - sensor.vorrat_kritisch
-  - sensor.vorrat_unter_mindestmenge
-  - sensor.vorrat_gesamt
   - sensor.vorrat_einkaufsliste
+  # … weitere Sensoren aus der Tabelle oben
 ```
 
 ---
@@ -100,6 +101,26 @@ entities:
 ## 📱 Als App installieren
 
 Im Browser auf **„Zum Startbildschirm hinzufügen"** tippen – öffnet dann wie eine native App im Vollbild.
+
+---
+
+## 💾 Speicherbedarf & Datenverbrauch
+
+Datensparsam und komplett **lokal** – kein Konto, keine Cloud, keine Telemetrie.
+
+**Wo liegen die Daten?** Alles im HA-Ordner `/share/vorratsverwaltung/`: `vorrat.db` (SQLite-Datenbank), `bilder/` (Produktfotos) und `.secret_key`. Dadurch bleiben die Daten bei Add-on-Updates erhalten und sind in HA-Backups enthalten.
+
+| Größe / Ressource | Wert |
+|---|---|
+| Add-on-Image (Download bei Installation) | ca. 150–250 MB \* (Python-Alpine + Bibliotheken) |
+| Arbeitsspeicher im Betrieb | ~60–70 MB |
+| Datenbank | wenige MB – ein Eintrag ist nur ein paar hundert Byte (1000 Produkte ≈ 1 MB) |
+| Produktfotos | je Bild max. 5 MB (nur wenn du Fotos hinterlegst) |
+| Quellcode | ~0,4 MB |
+
+<sub>\* grobe Schätzung; das Image wird einmalig beim Installieren/Update geladen.</sub>
+
+**Internet-Datenverkehr:** im Normalbetrieb praktisch **null**. Sensor-Updates (alle 5 Min) und Kalender-Sync laufen nur über die **lokale** HA-API. Internet nur bei aktiver Nutzung von **Web-Import** (~100–300 KB je Rezept) oder **Open Food Facts** (kleine JSON-Antwort + optional 1 Bild, max. 5 MB).
 
 ---
 
@@ -120,6 +141,10 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.6.5
+- 📋 **Text-Import**: Rezept aus freiem Text einfügen (Instagram-/Facebook-Caption, WhatsApp, Koch-App) – wird automatisch in Titel, Zutaten und Schritte zerlegt; editierbare Vorschau. Direkt neben dem Web-Import auf der Import-Seite
+- 📝 README: Sektion „Speicherbedarf & Datenverbrauch" ergänzt; doppelte Sensor-Liste entfernt
 
 ### 1.6.4
 - 👨‍🍳 **Kochmodus**: Rezept im Vollbild Schritt für Schritt kochen – große Schrift, Fortschrittsbalken, „◀ Zurück / Weiter ▶", einblendbare Zutaten, Tastatur (← → / Esc); der Bildschirm bleibt an (Wake Lock, bei HTTPS/Nabu Casa)

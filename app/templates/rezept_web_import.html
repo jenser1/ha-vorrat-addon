@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Rezept von Webseite importieren{% endblock %}
-{% block page_title %}Rezept von Webseite importieren{% endblock %}
+{% block title %}Rezept importieren{% endblock %}
+{% block page_title %}Rezept importieren{% endblock %}
 
 {% block content %}
 <div style="max-width: 900px; margin: 0 auto;">
@@ -32,6 +32,23 @@
     </div>
   </div>
 
+  <!-- Text/Caption Eingabe -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom: 6px;">📋 Rezept aus Text einfügen</div>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 12px;">
+      Kopiere den Rezepttext – z.&nbsp;B. eine <strong>Instagram-/Facebook-Bildunterschrift</strong>,
+      eine WhatsApp-Nachricht oder aus einer Koch-App – und füge ihn hier ein.
+      Zeilen wie <em>Zutaten:</em> und <em>Zubereitung:</em> verbessern die Erkennung.
+    </p>
+    <form method="post">
+      <textarea name="text" rows="8" required
+        placeholder="Cremige Tomatensuppe&#10;&#10;Zutaten:&#10;- 500 g Tomaten&#10;- 1 Zwiebel&#10;- 2 EL Olivenöl&#10;- Salz, Pfeffer&#10;&#10;Zubereitung:&#10;1. Zwiebel andünsten&#10;2. Tomaten dazu, 20 Min köcheln&#10;3. Pürieren und abschmecken"
+        style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px;
+               font-size:0.88rem; line-height:1.6; resize:vertical;">{{ text }}</textarea>
+      <button type="submit" class="btn btn-primary" style="margin-top:10px;">📋 Aus Text erkennen</button>
+    </form>
+  </div>
+
   {% if ergebnis %}
 
   {% if ergebnis._hinweis %}
@@ -40,6 +57,8 @@
   </div>
   {% elif ergebnis.quelle in ['schema.org', 'lidl+schema', 'kaufland+schema'] %}
   <div class="alert alert-success">✅ Rezept automatisch erkannt – bitte prüfen und speichern.</div>
+  {% elif ergebnis.quelle == 'text' %}
+  <div class="alert alert-success">📋 Aus Text erkannt – bitte prüfen, korrigieren und speichern.</div>
   {% elif ergebnis.quelle == 'lidl' %}
   <div class="alert alert-warning">
     ⚠️ <strong>Lidl-Kochen lädt Zutaten per JavaScript</strong> – automatischer Import nicht möglich.

@@ -2237,6 +2237,118 @@ def lidl_extrahieren(soup, url=""):
 
     return ergebnis
 
+# ── Freitext-Import (Social-Media-Caption / Koch-App-Text) ─────────────────────
+_ZUTATEN_HEADER = ("zutaten", "ingredients", "du brauchst", "das brauchst du",
+                   "einkaufsliste", "zutatenliste", "shopping list")
+_SCHRITT_HEADER = ("zubereitung", "anleitung", "so geht", "so wird", "zubereiten",
+                   "instructions", "preparation", "method", "directions", "steps",
+                   "und so", "los geht", "so einfach")
+
+def _freitext_titel(z):
+    """Deko/Emojis am Zeilenrand entfernen für eine Titelzeile."""
+    return re.sub(r"^[\W_]+|[\W_]+$", "", z).strip()
+
+def rezept_aus_text(text):
+    """Baut ein Rezept-Dict aus freiem Text (z.B. Instagram-/Facebook-Caption,
+    WhatsApp-Nachricht oder Koch-App-Text). Best-effort – die Vorschau ist editierbar.
+    Liefert dasselbe Format wie schema_org_extrahieren()."""
+    if not text or not text.strip():
+        return None
+
+    def norm_header(z):
+        return z.lower().strip().strip(":*#•★☆-–—▪▫◦●○ ").strip()
+
+    def bullet_weg(z):
+        return re.sub(r"^\s*(?:\d+\s*[.)]\s*|[-*•★☆▪▫◦●○–—☐▢]\s*)+", "", z).strip()
+
+    def sieht_wie_zutat_aus(z):
+        # Beginnt mit Menge -> Zutat; oder kurze Zeile ohne Satzzeichen am Ende
+        if re.match(r"^\s*[\d½¼¾⅓⅔]", z):
+            return True
+        return len(z) <= 45 and len(z.split()) <= 6 and not z.rstrip().endswith((".", "!", "?"))
+
+    zeilen = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    titel = ""
+    zutaten_zeilen = []
+    schritt_zeilen = []
+    portionen = 4
+    modus = "start"  # start -> heuristisch; "zutaten"; "schritte"
+
+    for roh in zeilen:
+        z = roh.strip()
+        if not z:
+            continue
+        low = z.lower()
+
+        # Portionen aus "für 4 Personen" / "4 Portionen"
+        if portionen == 4:
+            mp = re.search(r"(\d{1,3})\s*(portion|portionen|personen|serves|servings|stk)", low)
+            if mp:
+                try:
+                    portionen = max(1, int(mp.group(1)))
+                except ValueError:
+                    pass
+
+        # Abschnitts-Überschriften erkennen
+        n = norm_header(z)
+        if n and len(n) <= 30 and any(n.startswith(h) for h in _SCHRITT_HEADER):
+            modus = "schritte"
+            continue
+        if n and len(n) <= 30 and any(n.startswith(h) for h in _ZUTATEN_HEADER):
+            modus = "zutaten"
+            continue
+
+        # Reine Hashtag-/Mention-Zeilen ignorieren (#vegan @koch)
+        toks = z.split()
+        if toks and all(t.startswith(("#", "@")) for t in toks):
+            continue
+
+        # Erste sinnvolle Zeile = Titel
+        if not titel and modus == "start":
+            t = _freitext_titel(z)
+            if t:
+                titel = t[:120]
+            continue
+
+        z_clean = bullet_weg(z)
+        if not z_clean:
+            continue
+
+        if modus == "zutaten":
+            zutaten_zeilen.append(z_clean)
+        elif modus == "schritte":
+            schritt_zeilen.append(z_clean)
+        else:
+            (zutaten_zeilen if sieht_wie_zutat_aus(z_clean) else schritt_zeilen).append(z_clean)
+
+    # Zutaten strukturieren (Listen wie "Tomaten, Zwiebel, Knoblauch" auftrennen)
+    zutaten = []
+    for zl in zutaten_zeilen:
+        teile = [t.strip() for t in zl.split(",")] if zl.count(",") >= 2 else [zl]
+        for t in teile:
+            if not t:
+                continue
+            if len(t) > 80 and t.rstrip().endswith((".", "!", "?")):
+                schritt_zeilen.append(t)  # war wohl ein Satz -> Schritt
+                continue
+            menge, einheit, name = zutat_parsen(t)
+            if name:
+                zutaten.append({"name": name, "menge": menge, "einheit": einheit})
+
+    anleitung = "\n".join(f"{i}. {s}" for i, s in enumerate(schritt_zeilen, 1))
+
+    if not titel:
+        titel = zutaten[0]["name"] if zutaten else "Neues Rezept"
+
+    return {
+        "titel": titel,
+        "beschreibung": "",
+        "portionen": portionen,
+        "zutaten": zutaten,
+        "anleitung": anleitung,
+        "quelle": "text",
+    }
+
 def rezept_von_url(url):
     """Hauptfunktion: Lädt URL und extrahiert Rezept."""
     if not url.startswith("http"):
@@ -2297,26 +2409,40 @@ def rezept_web_import():
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     ergebnis = None
     url = ""
+    text = ""
     fehler = None
     debug = None
+
+    def _debug(erg):
+        return {
+            "quelle": erg.get("quelle", "?"),
+            "titel": "✅" if erg.get("titel") else "❌",
+            "beschreibung": "✅" if erg.get("beschreibung") else "❌",
+            "zutaten": f"✅ {len(erg.get('zutaten', []))} Stück" if erg.get("zutaten") else "❌",
+            "anleitung": f"✅ {len(erg.get('anleitung',''))} Zeichen" if erg.get("anleitung") else "❌",
+        }
+
     if request.method == "POST":
-        url = request.form.get("url", "").strip()
-        if url:
+        text = (request.form.get("text") or "").strip()
+        url = (request.form.get("url") or "").strip()
+        if text:
+            ergebnis = rezept_aus_text(text) or {
+                "titel": "", "beschreibung": "", "portionen": 4,
+                "zutaten": [], "anleitung": "", "quelle": "text"}
+            if not ergebnis.get("zutaten") and not ergebnis.get("anleitung"):
+                flash("Aus dem Text ließ sich kein Rezept erkennen – bitte Felder unten manuell ausfüllen.", "warning")
+            debug = _debug(ergebnis)
+        elif url:
             ergebnis, fehler = rezept_von_url(url)
             if fehler:
                 flash(fehler, "danger")
             if ergebnis:
-                debug = {
-                    "quelle": ergebnis.get("quelle", "?"),
-                    "titel": "✅" if ergebnis.get("titel") else "❌",
-                    "beschreibung": "✅" if ergebnis.get("beschreibung") else "❌",
-                    "zutaten": f"✅ {len(ergebnis.get('zutaten', []))} Stück" if ergebnis.get("zutaten") else "❌",
-                    "anleitung": f"✅ {len(ergebnis.get('anleitung',''))} Zeichen" if ergebnis.get("anleitung") else "❌",
-                }
+                debug = _debug(ergebnis)
         else:
-            flash("Bitte eine URL eingeben.", "danger")
+            flash("Bitte eine URL eingeben oder Text einfügen.", "danger")
+
     return render_template("rezept_web_import.html",
-        ergebnis=ergebnis, url=url, fehler=fehler,
+        ergebnis=ergebnis, url=url, text=text, fehler=fehler,
         debug=debug, einheiten=EINHEITEN, einkauf_count=einkauf_count)
 
 # ── Essensplaner Routen ────────────────────────────────────────────────────────

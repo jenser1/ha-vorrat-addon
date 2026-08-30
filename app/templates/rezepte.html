@@ -4,7 +4,7 @@
 
 {% block topbar_actions %}
   <a href="{{ url_for('rezept_pdf_import') }}" class="btn btn-ghost">📄 PDF</a>
-  <a href="{{ url_for('rezept_web_import') }}" class="btn btn-ghost" style="margin-left:6px;">🌐 Web</a>
+  <a href="{{ url_for('rezept_web_import') }}" class="btn btn-ghost" style="margin-left:6px;">🌐 Import</a>
   <a href="{{ url_for('rezept_neu') }}" class="btn btn-primary" style="margin-left:6px;">✍️ Neues Rezept</a>
 {% endblock %}
 
@@ -97,7 +97,7 @@
   <p style="color:var(--muted); margin-bottom:16px;">Noch keine Rezepte vorhanden.</p>
   <div style="display:flex; gap:12px; justify-content:center;">
     <a href="{{ url_for('rezept_pdf_import') }}" class="btn btn-ghost">📄 PDF importieren</a>
-    <a href="{{ url_for('rezept_web_import') }}" class="btn btn-ghost">🌐 Web importieren</a>
+    <a href="{{ url_for('rezept_web_import') }}" class="btn btn-ghost">🌐 Web/Text importieren</a>
     <a href="{{ url_for('rezept_neu') }}" class="btn btn-primary">✍️ Erstes Rezept anlegen</a>
   </div>
 </div>

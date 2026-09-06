@@ -34,6 +34,21 @@
           {% endfor %}
         </select>
       </div>
+      <div class="form-group">
+        <label>⏱️ Vorbereitung (Min)</label>
+        <input type="number" name="vorbereitungszeit" min="0" step="1"
+               value="{{ rezept.vorbereitungszeit if rezept and rezept.vorbereitungszeit else '' }}" placeholder="z. B. 20">
+      </div>
+      <div class="form-group">
+        <label>🍳 Kochen/Backen (Min)</label>
+        <input type="number" name="kochzeit" min="0" step="1"
+               value="{{ rezept.kochzeit if rezept and rezept.kochzeit else '' }}" placeholder="z. B. 30">
+      </div>
+      <div class="form-group">
+        <label>⏰ Gesamt (Min)</label>
+        <input type="number" name="gesamtzeit" min="0" step="1"
+               value="{{ rezept.gesamtzeit if rezept and rezept.gesamtzeit else '' }}" placeholder="optional">
+      </div>
     </div>
   </div>
 

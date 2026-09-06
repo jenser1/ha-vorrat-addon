@@ -140,6 +140,9 @@ class Rezept(db.Model):
     portionen = db.Column(db.Integer, default=4)
     kategorie = db.Column(db.String(50), default="Sonstiges")
     quell_url = db.Column(db.String(500), default="")
+    vorbereitungszeit = db.Column(db.Integer)  # Minuten, optional (prepTime)
+    kochzeit = db.Column(db.Integer)           # Minuten, optional (cookTime)
+    gesamtzeit = db.Column(db.Integer)         # Minuten, optional (totalTime)
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
     zutaten = db.relationship("RezeptZutat", backref="rezept", lazy=True, cascade="all, delete-orphan")
 
@@ -1522,6 +1525,9 @@ def rezept_neu():
             portionen=int(request.form.get("portionen", 4)),
             kategorie=request.form.get("kategorie", "Sonstiges"),
             quell_url=quell_url,
+            vorbereitungszeit=form_minuten("vorbereitungszeit"),
+            kochzeit=form_minuten("kochzeit"),
+            gesamtzeit=form_minuten("gesamtzeit"),
         )
         db.session.add(r)
         db.session.flush()
@@ -1567,6 +1573,9 @@ def rezept_bearbeiten(id):
         r.anleitung = request.form.get("anleitung", "")
         r.portionen = int(request.form.get("portionen", 4))
         r.kategorie = request.form.get("kategorie", "Sonstiges")
+        r.vorbereitungszeit = form_minuten("vorbereitungszeit")
+        r.kochzeit = form_minuten("kochzeit")
+        r.gesamtzeit = form_minuten("gesamtzeit")
         # Zutaten neu setzen
         RezeptZutat.query.filter_by(rezept_id=r.id).delete()
         namen = request.form.getlist("zutat_name")
@@ -1699,6 +1708,88 @@ HEADERS = {
     "DNT": "1",
     "Upgrade-Insecure-Requests": "1",
 }
+
+def zeit_zu_minuten(wert):
+    """ISO-8601-Dauer ('PT1H30M'), Zahl oder Text -> Minuten (int) oder None."""
+    if wert is None or isinstance(wert, bool):
+        return None
+    if isinstance(wert, (int, float)):
+        return int(wert) if wert and wert > 0 else None
+    s = str(wert).strip()
+    if not s:
+        return None
+    m = re.match(r"^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", s, re.I)
+    if m and any(m.groups()):
+        tage = int(m.group(1) or 0)
+        std = int(m.group(2) or 0)
+        minu = int(m.group(3) or 0)
+        sek = int(m.group(4) or 0)
+        total = tage * 1440 + std * 60 + minu + (1 if sek >= 30 else 0)
+        return total or None
+    # Freitext "1 Std 30 min" / "90 min"
+    std = re.search(r"(\d+)\s*(?:std|stunden?|hours?|h)\b", s, re.I)
+    minu = re.search(r"(\d+)\s*(?:min|minuten?|minutes?)\b", s, re.I)
+    total = 0
+    if std:
+        total += int(std.group(1)) * 60
+    if minu:
+        total += int(minu.group(1))
+    return total or None
+
+def minuten_formatiert(minu):
+    """Minuten -> '1 Std 30 Min' / '45 Min' / ''."""
+    try:
+        minu = int(minu)
+    except (TypeError, ValueError):
+        return ""
+    if minu <= 0:
+        return ""
+    h, m = divmod(minu, 60)
+    if h and m:
+        return f"{h} Std {m} Min"
+    if h:
+        return f"{h} Std"
+    return f"{m} Min"
+
+@app.template_filter("dauer")
+def _dauer_filter(minu):
+    return minuten_formatiert(minu)
+
+def zeit_label_erkennen(zeile):
+    """Erkennt Metazeilen wie 'Zubereitungszeit: 30 min' ->
+    ('vorbereitung'|'koch'|'gesamt', minuten) oder None."""
+    zl = zeile.lower()
+    if not any(k in zl for k in ("zeit", "dauer")):
+        return None
+    std = re.search(r"(\d+)\s*(?:std|stunden?|h)\b", zl)
+    minu = re.search(r"(\d+)\s*(?:min|minuten?)", zl)
+    total = 0
+    if std:
+        total += int(std.group(1)) * 60
+    if minu:
+        total += int(minu.group(1))
+    if not total:
+        m = re.search(r"(\d+)", zl)
+        if m:
+            total = int(m.group(1))
+    if not total:
+        return None
+    if any(k in zl for k in ("vorbereit", "arbeitszeit", "prep")):
+        return "vorbereitung", total
+    if any(k in zl for k in ("koch", "back", "gar", "cook")):
+        return "koch", total
+    return "gesamt", total
+
+def form_minuten(name):
+    """Liest ein optionales Minuten-Feld aus dem Formular -> int (>0) oder None."""
+    v = (request.form.get(name) or "").strip().replace(",", ".")
+    if not v:
+        return None
+    try:
+        n = int(float(v))
+    except ValueError:
+        return None
+    return n if n > 0 else None
 
 def html_bereinigen(text):
     """Entfernt HTML-Tags und normalisiert Whitespace."""
@@ -1874,6 +1965,9 @@ def schema_org_extrahieren(soup):
                 "portionen": portionen,
                 "zutaten": zutaten,
                 "anleitung": "\n".join(anleitung_zeilen),
+                "vorbereitungszeit": zeit_zu_minuten(rezept.get("prepTime")),
+                "kochzeit": zeit_zu_minuten(rezept.get("cookTime")),
+                "gesamtzeit": zeit_zu_minuten(rezept.get("totalTime")),
                 "quelle": "schema.org",
             }
         except Exception:
@@ -2272,6 +2366,7 @@ def rezept_aus_text(text):
     zutaten_zeilen = []
     schritt_zeilen = []
     portionen = 4
+    vorbereitungszeit = kochzeit = gesamtzeit = None
     modus = "start"  # start -> heuristisch; "zutaten"; "schritte"
 
     for roh in zeilen:
@@ -2288,6 +2383,18 @@ def rezept_aus_text(text):
                     portionen = max(1, int(mp.group(1)))
                 except ValueError:
                     pass
+
+        # Zeitangaben aus Metazeilen ("Zubereitungszeit: 30 min")
+        zt = zeit_label_erkennen(z)
+        if zt:
+            art, minu = zt
+            if art == "vorbereitung" and vorbereitungszeit is None:
+                vorbereitungszeit = minu
+            elif art == "koch" and kochzeit is None:
+                kochzeit = minu
+            elif gesamtzeit is None:
+                gesamtzeit = minu
+            continue
 
         # Abschnitts-Überschriften erkennen
         n = norm_header(z)
@@ -2346,6 +2453,9 @@ def rezept_aus_text(text):
         "portionen": portionen,
         "zutaten": zutaten,
         "anleitung": anleitung,
+        "vorbereitungszeit": vorbereitungszeit,
+        "kochzeit": kochzeit,
+        "gesamtzeit": gesamtzeit,
         "quelle": "text",
     }
 
@@ -3061,6 +3171,10 @@ def db_migrieren():
         if tabelle_existiert("rezept") and not spalte_existiert("rezept", "quell_url"):
             cur.execute("ALTER TABLE rezept ADD COLUMN quell_url VARCHAR(500) DEFAULT ''")
             conn.commit()
+        for _rz_spalte in ("vorbereitungszeit", "kochzeit", "gesamtzeit"):
+            if tabelle_existiert("rezept") and not spalte_existiert("rezept", _rz_spalte):
+                cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} INTEGER")
+                conn.commit()
 
         # essensplan
         if not tabelle_existiert("essensplan"):

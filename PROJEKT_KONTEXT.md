@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.5
+**Aktuelle Version:** 1.6.6
 
 ---
 
@@ -64,7 +64,8 @@ Einkaufsliste: id, liste_id, name, menge, einheit,
                position, hinzugefuegt
 
 Rezept: id, name, beschreibung, anleitung, portionen,
-        kategorie, quell_url, erstellt
+        kategorie, quell_url, erstellt,
+        vorbereitungszeit, kochzeit, gesamtzeit (Minuten, optional; normale ORM-Spalten + ALTER-TABLE-Migration wie quell_url)
 
 RezeptZutat: id, rezept_id, name, menge, einheit
 
@@ -144,6 +145,10 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Einzelpreis × Menge Berechnung
 - Alle erledigten in Vorrat buchen (einzeln oder alle auf einmal)
 - Rezeptverwaltung mit Vorrat-Abgleich
+- Zeitangaben (vorbereitungszeit/kochzeit/gesamtzeit, Minuten): Web-Import übernimmt
+  schema.org prepTime/cookTime/totalTime (zeit_zu_minuten, ISO-8601 -> Min), Text-Import
+  erkennt "Zubereitungszeit: 30 min" (zeit_label_erkennen). Anzeige via Jinja-Filter |dauer
+  (minuten_formatiert) auf Rezeptseite + Kochmodus-Zeitleiste. Formular-Parsing: form_minuten()
 - Kochmodus: Vollbild-Overlay auf der Rezeptseite (rezept_detail.html), Schritt für Schritt
   (Anleitung wird clientseitig in Schritte geparst), Fortschritt, einblendbare Zutaten,
   Wake Lock (Bildschirm an), Tastatur ← → / Esc – reines JS/CSS, kein Server-Code

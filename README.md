@@ -36,6 +36,7 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **Web-Import** von Chefkoch, Kaufland, Lidl und hunderten weiteren Seiten
 - **📋 Text-Import**: Rezept aus freiem Text einfügen (Instagram-/Facebook-Bildunterschrift, WhatsApp, Koch-App) – wird automatisch in Zutaten & Schritte zerlegt, editierbare Vorschau
 - **👨‍🍳 Kochmodus**: Vollbild-Ansicht Schritt für Schritt beim Kochen – große Schrift, Fortschrittsbalken, einblendbare Zutaten, Bildschirm bleibt an (Wake Lock)
+- **⏱️ Zeitangaben**: Vorbereitungs-, Koch-/Back- und Gesamtzeit – beim Web-/Text-Import automatisch übernommen, auf der Rezeptseite und im Kochmodus angezeigt
 - Filter und Sortierung nach Kategorie
 
 ### 📅 Essensplaner
@@ -141,6 +142,9 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.6.6
+- ⏱️ **Zeitangaben** pro Rezept: Vorbereitung, Kochen/Backen und Gesamt (in Minuten). Beim Web-Import automatisch aus der Seite übernommen (schema.org `prepTime`/`cookTime`/`totalTime`, auch ISO-Format), beim Text-Import aus Zeilen wie „Zubereitungszeit: 30 min" erkannt, manuell eintragbar – angezeigt auf der Rezeptseite und im Kochmodus
 
 ### 1.6.5
 - 📋 **Text-Import**: Rezept aus freiem Text einfügen (Instagram-/Facebook-Caption, WhatsApp, Koch-App) – wird automatisch in Titel, Zutaten und Schritte zerlegt; editierbare Vorschau. Direkt neben dem Web-Import auf der Import-Seite

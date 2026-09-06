@@ -36,9 +36,12 @@
           {% endif %}
         </div>
       </div>
-      <div style="display: flex; gap: 16px; font-size: 0.85rem; color: var(--muted);">
+      <div style="display: flex; gap: 16px; font-size: 0.85rem; color: var(--muted); flex-wrap: wrap;">
         <span>📂 {{ rezept.kategorie }}</span>
         <span>🍽️ {{ rezept.portionen }} Portionen</span>
+        {% if rezept.vorbereitungszeit %}<span>⏱️ Vorbereitung {{ rezept.vorbereitungszeit|dauer }}</span>{% endif %}
+        {% if rezept.kochzeit %}<span>🍳 Kochen/Backen {{ rezept.kochzeit|dauer }}</span>{% endif %}
+        {% if rezept.gesamtzeit %}<span>⏰ Gesamt {{ rezept.gesamtzeit|dauer }}</span>{% endif %}
         <span>📅 {{ rezept.erstellt.strftime('%d.%m.%Y') }}</span>
       </div>
     </div>
@@ -164,6 +167,9 @@ document.getElementById('essensplan-modal').addEventListener('click', function(e
   .koch-close:active{ opacity:0.7; }
   .koch-progress{ height:6px; background:var(--border); }
   .koch-progress-fill{ height:100%; width:0; background:var(--primary); transition:width 0.25s ease; }
+  .koch-zeiten{ display:flex; flex-wrap:wrap; gap:8px; justify-content:center; padding:10px 16px 0; }
+  .koch-zeiten span{ font-size:0.82rem; color:var(--muted); background:var(--card);
+                     border:1px solid var(--border); border-radius:999px; padding:3px 11px; }
   .koch-body{ flex:1; display:flex; flex-direction:column; justify-content:center; gap:16px;
               padding:26px 22px; overflow-y:auto; text-align:center; }
   .koch-schrittnr{ font-size:0.9rem; font-weight:700; color:var(--primary);
@@ -190,6 +196,13 @@ document.getElementById('essensplan-modal').addEventListener('click', function(e
     <button type="button" class="koch-close" onclick="kochmodusSchliessen()" aria-label="Kochmodus schließen">✕</button>
   </div>
   <div class="koch-progress"><div id="koch-progress-fill" class="koch-progress-fill"></div></div>
+  {% if rezept.vorbereitungszeit or rezept.kochzeit or rezept.gesamtzeit %}
+  <div class="koch-zeiten">
+    {% if rezept.vorbereitungszeit %}<span>⏱️ Vorb. {{ rezept.vorbereitungszeit|dauer }}</span>{% endif %}
+    {% if rezept.kochzeit %}<span>🍳 Kochen {{ rezept.kochzeit|dauer }}</span>{% endif %}
+    {% if rezept.gesamtzeit %}<span>⏰ Gesamt {{ rezept.gesamtzeit|dauer }}</span>{% endif %}
+  </div>
+  {% endif %}
   <div class="koch-body">
     <div id="koch-schrittnr" class="koch-schrittnr"></div>
     <div id="koch-schritt" class="koch-schritt"></div>

@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.6.6
+**Aktuelle Version:** 1.7.0
 
 ---
 
@@ -69,7 +69,8 @@ Rezept: id, name, beschreibung, anleitung, portionen,
 
 RezeptZutat: id, rezept_id, name, menge, einheit
 
-Einstellungen: id, sprache, waehrung, theme, farbe, kalender_entity
+Einstellungen: id, sprache, waehrung, theme, farbe, kalender_entity,
+               timer_notify (notify-Dienst, "" = keiner), timer_text (Vorlage, "" = Standard)
 
 Stammdaten: id, typ (lagerort/kategorie/einheit), name, ist_frost
             (UNIQUE: typ + name) – verwaltbare Listen
@@ -152,6 +153,15 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Kochmodus: Vollbild-Overlay auf der Rezeptseite (rezept_detail.html), Schritt für Schritt
   (Anleitung wird clientseitig in Schritte geparst), Fortschritt, einblendbare Zutaten,
   Wake Lock (Bildschirm an), Tastatur ← → / Esc – reines JS/CSS, kein Server-Code
+- Küchen-Timer: EINE Implementierung global in base.html (FAB unten rechts + Modal + JS);
+  Kochmodus nutzt denselben Dialog via timerModalOeffnen(KOCH_PRESETS) + Chip im Header,
+  FAB wird bei offenem Kochmodus ausgeblendet (timerFabSync). Backend: /kochtimer/start|stop|
+  status|test, threading.Timer, _kochtimer-State mit Lock. Ablauf -> _kochtimer_melden():
+  HA-Event vorrat_kochtimer_fertig + sensor.vorrat_kochtimer + optionale Notify
+  (Einstellungen.timer_notify/timer_text). kochtimer_sensor_aktualisieren() läuft auch in der
+  5-Min-Schleife -> Sensor überlebt HA-Neustarts (REST-States sind sonst flüchtig).
+  HA-Helfer _ha_post() mit raise_for_status + Logging. Portabel: notify-Liste live per
+  ha_notify_dienste() (/api/services), nichts hartkodiert.
 - PDF-Import mit Spalten-Erkennung (Kaufland-Format)
 - Web-Import via Schema.org (Chefkoch, Kaufland, etc.)
   - HEADERS ohne "br" (Brotli): requests dekodiert nur gzip/deflate ohne Zusatzpaket,
@@ -214,6 +224,8 @@ DB_PATH=/tmp/vorrat.db python app.py
 | Internal Server Error | Jinja-Block fehlt | {% endblock %} prüfen |
 | Build-Fehler | config.yaml doppelt | Duplikate entfernen |
 | Web-Import „Kein Rezept gefunden" | Brotli-Antwort (br) nicht dekodierbar | Kein `br` in Accept-Encoding (nur gzip/deflate) |
+| Event `vorrat_kochtimer_fertig` „nicht da" | HA listet Custom-Events nirgends | Entwicklerwerkzeuge → Ereignisse lauschen, oder Sensor-Trigger `sensor.vorrat_kochtimer` → `fertig` |
+| REST-Sensor nach HA-Neustart weg | `POST /api/states` ist nicht persistent | Sensor regelmäßig neu setzen (5-Min-Schleife) |
 
 ---
 

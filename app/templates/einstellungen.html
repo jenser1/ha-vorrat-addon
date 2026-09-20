@@ -143,6 +143,62 @@
     </div>
   </form>
 
+  <!-- Kochtimer-Benachrichtigung -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:6px;">⏲️ Küchen-Timer → Home Assistant</div>
+    <p style="color:var(--muted); font-size:0.82rem; margin-bottom:14px;">
+      Läuft ein Timer ab, meldet das Add-on an Home Assistant: Event <code>vorrat_kochtimer_fertig</code>
+      und <code>sensor.vorrat_kochtimer</code> (idle / läuft / fertig). Optional zusätzlich eine direkte Handy-Benachrichtigung.
+    </p>
+    <form method="post">
+      <div class="form-group" style="margin-bottom:14px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          Handy-Benachrichtigung (notify-Dienst)
+        </label>
+        {% if notify_dienste %}
+        <select name="timer_notify" style="width:100%;">
+          <option value="">— keine direkte Benachrichtigung —</option>
+          {% for d in notify_dienste %}
+          <option value="{{ d }}" {{ 'selected' if settings.timer_notify == d }}>notify.{{ d }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input type="text" name="timer_notify" value="{{ settings.timer_notify }}"
+               placeholder="z. B. mobile_app_dein_handy (leer = aus)">
+        <p style="color:var(--muted); font-size:0.75rem; margin-top:6px;">
+          Keine notify-Dienste geladen – Name manuell eintragen (ohne <code>notify.</code>) oder leer lassen.
+        </p>
+        {% endif %}
+      </div>
+
+      <div class="form-group" style="margin-bottom:16px;">
+        <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">
+          Nachrichtentext (optional)
+        </label>
+        <input type="text" name="timer_text" value="{{ settings.timer_text }}"
+               placeholder="⏲️ Kochtimer fertig – {label}">
+        <p style="color:var(--muted); font-size:0.75rem; margin-top:6px;">
+          Platzhalter: <code>{label}</code>, <code>{rezept}</code>, <code>{zeit}</code>. Leer = Standardtext.
+        </p>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="width:100%;">💾 Timer-Einstellungen speichern</button>
+    </form>
+
+    <form method="post" action="{{ url_for('kochtimer_test') }}" style="margin-top:10px;">
+      <button type="submit" class="btn btn-ghost" style="width:100%;">🔔 Test senden (Event + Sensor + Push)</button>
+    </form>
+
+    <div style="color:var(--muted); font-size:0.75rem; margin-top:12px; line-height:1.5;">
+      <strong>So siehst du es in HA:</strong> Das Event taucht in keiner Liste auf – es existiert nur im Moment des Feuerns.
+      <br>• <em>Entwicklerwerkzeuge → Ereignisse → „Auf Ereignis lauschen"</em>: <code>vorrat_kochtimer_fertig</code> eintippen,
+      „Lauschen starten", dann oben auf <strong>Test senden</strong> klicken.
+      <br>• In einer <em>Automation</em>: Auslöser „Ereignis", Ereignistyp <code>vorrat_kochtimer_fertig</code> (manuell eintippen).
+      <br>• Der Sensor <code>sensor.vorrat_kochtimer</code> steht unter <em>Entwicklerwerkzeuge → Zustände</em> (alle 5 Min aktualisiert).
+      <br>Für Sprachansage/Wecker: Automation auf das Event (z. B. TTS auf einen Lautsprecher) – Beispiel in der README.
+    </div>
+  </div>
+
   <!-- Verwaltung: Lagerorte / Kategorien / Einheiten -->
   <div class="card" id="verwaltung">
     <div class="card-title" style="margin-bottom:6px;">🗂️ Verwaltung</div>

@@ -160,6 +160,8 @@ class Einstellungen(db.Model):
     theme = db.Column(db.String(20), default="light")
     farbe = db.Column(db.String(20), default="blau")
     kalender_entity = db.Column(db.String(100), default="")
+    timer_notify = db.Column(db.String(100), default="")   # notify-Dienst der Installation, "" = keiner
+    timer_text = db.Column(db.String(200), default="")      # Nachrichten-Vorlage, "" = Standard
 
 class Stammdaten(db.Model):
     """Verwaltbare Listen: Lagerorte, Kategorien, Einheiten (typ + name)."""
@@ -2753,17 +2755,23 @@ def einstellungen():
         s.farbe = request.form.get("farbe", s.farbe)
         if "kalender_entity" in request.form:
             s.kalender_entity = request.form.get("kalender_entity", "").strip()
+        if "timer_notify" in request.form:
+            s.timer_notify = request.form.get("timer_notify", "").strip()
+        if "timer_text" in request.form:
+            s.timer_text = request.form.get("timer_text", "").strip()
         db.session.commit()
         flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("einstellungen"))
     kalender = ha_kalender_liste()
+    notify_dienste = ha_notify_dienste()
     verwaltung = {
         "lagerort":  stammdaten_mit_anzahl("lagerort"),
         "kategorie": stammdaten_mit_anzahl("kategorie"),
         "einheit":   stammdaten_mit_anzahl("einheit"),
     }
     return render_template("einstellungen.html",
-        settings=s, einkauf_count=einkauf_count, kalender=kalender, verwaltung=verwaltung)
+        settings=s, einkauf_count=einkauf_count, kalender=kalender,
+        notify_dienste=notify_dienste, verwaltung=verwaltung)
 
 # ── HA Kalender Integration ───────────────────────────────────────────────────
 
@@ -2930,6 +2938,168 @@ def kalender_reconcile(ent, von, bis):
 
 # ── HA Sensor Integration ─────────────────────────────────────────────────────
 
+# ── Kochtimer (portabel: HA-Event + Sensor + optionale Notify) ─────────────────
+def ha_notify_dienste():
+    """notify.*-Dienste der jeweiligen HA-Installation (live abgefragt, nichts hartkodiert)."""
+    api, hdr = _ha_api()
+    if not api:
+        return []
+    try:
+        r = requests.get(f"{api}/services", headers=hdr, timeout=(3, 7))
+        r.raise_for_status()
+        for d in r.json():
+            if d.get("domain") == "notify":
+                return sorted(d.get("services", {}).keys())
+    except Exception as e:
+        print(f"HA Notify-Liste Fehler: {e}", flush=True)
+    return []
+
+def _ha_post(pfad, payload, was):
+    """POST an die HA-API mit Status-Prüfung + Logging. True bei Erfolg (No-op außerhalb HA)."""
+    api, hdr = _ha_api()
+    if not api:
+        return False
+    try:
+        r = requests.post(f"{api}/{pfad}", headers=hdr, json=payload, timeout=5)
+        r.raise_for_status()
+        return True
+    except requests.HTTPError as e:
+        print(f"HA {was} HTTP-Fehler: {e.response.status_code} {e.response.text[:200]}", flush=True)
+    except Exception as e:
+        print(f"HA {was} Fehler: {e}", flush=True)
+    return False
+
+def ha_state_setzen(entity_id, state, attributes=None):
+    """Setzt einen HA-Zustand."""
+    return _ha_post(f"states/{entity_id}", {"state": str(state), "attributes": attributes or {}},
+                    f"state ({entity_id})")
+
+def ha_event_feuern(event_type, daten=None):
+    """Feuert ein HA-Event."""
+    return _ha_post(f"events/{event_type}", daten or {}, f"Event ({event_type})")
+
+def ha_notify_senden(dienst, titel, nachricht):
+    """Ruft notify.<dienst> auf (nur wenn konfiguriert)."""
+    if not dienst:
+        return False
+    return _ha_post(f"services/notify/{dienst}", {"title": titel, "message": nachricht},
+                    f"Notify ({dienst})")
+
+def timer_nachricht(vorlage, label, rezept, sekunden):
+    """Baut den Benachrichtigungstext (Platzhalter {label}/{rezept}/{zeit})."""
+    zeit = minuten_formatiert(round(sekunden / 60)) or f"{sekunden} s"
+    if vorlage:
+        try:
+            return vorlage.format(label=label or "", rezept=rezept or "", zeit=zeit)
+        except Exception:
+            return vorlage
+    return "⏲️ Kochtimer fertig" + (f" – {label}" if label else "")
+
+_kochtimer_lock = threading.Lock()
+_kochtimer = {"aktiv": False, "timer": None, "ende": 0.0, "label": "", "rezept": "",
+              "fertig_um": 0.0, "fertig_label": "", "fertig_rezept": ""}
+KOCHTIMER_FERTIG_ANZEIGE = 600  # Sekunden, wie lange "fertig" im Sensor stehen bleibt
+
+def kochtimer_sensor_aktualisieren():
+    """Hält sensor.vorrat_kochtimer aktuell (idle / läuft / fertig).
+    Wird auch von der 5-Min-Schleife aufgerufen -> Sensor überlebt HA-Neustarts."""
+    with _kochtimer_lock:
+        aktiv, ende = _kochtimer["aktiv"], _kochtimer["ende"]
+        label, rezept = _kochtimer["label"], _kochtimer["rezept"]
+        fertig_um = _kochtimer["fertig_um"]
+        fertig_label, fertig_rezept = _kochtimer["fertig_label"], _kochtimer["fertig_rezept"]
+    attrs = {"friendly_name": "Vorrat Kochtimer"}
+    if aktiv:
+        attrs.update({"icon": "mdi:timer-sand", "label": label, "rezept": rezept,
+                      "rest_sekunden": max(0, int(round(ende - time.time()))),
+                      "endet_um": datetime.fromtimestamp(ende).isoformat(timespec="seconds")})
+        return ha_state_setzen("sensor.vorrat_kochtimer", "läuft", attrs)
+    if fertig_um and time.time() - fertig_um < KOCHTIMER_FERTIG_ANZEIGE:
+        attrs.update({"icon": "mdi:timer-alert", "label": fertig_label, "rezept": fertig_rezept,
+                      "fertig_um": datetime.fromtimestamp(fertig_um).isoformat(timespec="seconds")})
+        return ha_state_setzen("sensor.vorrat_kochtimer", "fertig", attrs)
+    attrs.update({"icon": "mdi:timer-outline", "label": "", "rezept": ""})
+    return ha_state_setzen("sensor.vorrat_kochtimer", "idle", attrs)
+
+def _kochtimer_melden(label, rezept, sekunden):
+    """Meldet 'Timer fertig' an HA: Event + Sensor 'fertig' + optionale Notify.
+    Wird vom Ablauf-Callback UND vom Test-Button genutzt. Gibt True zurück, wenn Notify gesendet."""
+    print(f"Kochtimer fertig: '{label or '-'}' ({sekunden} s) -> Event vorrat_kochtimer_fertig", flush=True)
+    ha_event_feuern("vorrat_kochtimer_fertig",
+                    {"label": label, "rezept": rezept, "sekunden": sekunden})
+    with _kochtimer_lock:
+        _kochtimer.update({"fertig_um": time.time(), "fertig_label": label, "fertig_rezept": rezept})
+    kochtimer_sensor_aktualisieren()
+    try:
+        with app.app_context():
+            s = get_settings()
+            dienst = (getattr(s, "timer_notify", "") or "").strip()
+            vorlage = (getattr(s, "timer_text", "") or "").strip()
+    except Exception:
+        dienst, vorlage = "", ""
+    if dienst:
+        return ha_notify_senden(dienst, "Vorratsverwaltung", timer_nachricht(vorlage, label, rezept, sekunden))
+    return False
+
+def _kochtimer_fertig(label, rezept, sekunden):
+    """Callback beim Ablauf des Timers."""
+    with _kochtimer_lock:
+        _kochtimer.update({"aktiv": False, "timer": None, "ende": 0.0})
+    _kochtimer_melden(label, rezept, sekunden)
+
+@app.route("/kochtimer/start", methods=["POST"])
+def kochtimer_start():
+    try:
+        sekunden = int(float(request.form.get("sekunden", 0)))
+    except (ValueError, TypeError):
+        sekunden = 0
+    sekunden = max(1, min(sekunden, 6 * 3600))  # 1 s .. 6 h
+    label = (request.form.get("label") or "").strip()[:60]
+    rezept = (request.form.get("rezept") or "").strip()[:100]
+    ende = time.time() + sekunden
+    with _kochtimer_lock:
+        if _kochtimer["timer"]:
+            _kochtimer["timer"].cancel()
+        tmr = threading.Timer(sekunden, _kochtimer_fertig, args=(label, rezept, sekunden))
+        tmr.daemon = True
+        _kochtimer.update({"aktiv": True, "timer": tmr, "ende": ende, "label": label, "rezept": rezept})
+        tmr.start()
+    print(f"Kochtimer gestartet: '{label or '-'}' {sekunden} s", flush=True)
+    kochtimer_sensor_aktualisieren()
+    return {"ok": True, "ende": ende, "sekunden": sekunden}
+
+@app.route("/kochtimer/stop", methods=["POST"])
+def kochtimer_stop():
+    with _kochtimer_lock:
+        if _kochtimer["timer"]:
+            _kochtimer["timer"].cancel()
+        _kochtimer.update({"aktiv": False, "timer": None, "ende": 0.0, "fertig_um": 0.0})
+    kochtimer_sensor_aktualisieren()
+    return {"ok": True}
+
+@app.route("/kochtimer/status")
+def kochtimer_status():
+    with _kochtimer_lock:
+        aktiv = _kochtimer["aktiv"]
+        rest = max(0, int(round(_kochtimer["ende"] - time.time()))) if aktiv else 0
+        return {"aktiv": aktiv, "rest": rest,
+                "label": _kochtimer["label"], "rezept": _kochtimer["rezept"]}
+
+@app.route("/kochtimer/test", methods=["POST"])
+def kochtimer_test():
+    """Test-Button in den Einstellungen: feuert Event + Sensor 'fertig' + Notify sofort."""
+    if not _ha_api()[0]:
+        flash("Kein Home Assistant erreichbar (SUPERVISOR_TOKEN fehlt) – Test nur im Add-on möglich.", "danger")
+        return redirect(url_for("einstellungen"))
+    notify_ok = _kochtimer_melden("Test", "", 0)
+    dienst = (get_settings().timer_notify or "").strip()
+    if dienst and not notify_ok:
+        flash(f"Event + Sensor gesendet, aber notify.{dienst} ist fehlgeschlagen – siehe Add-on-Log.", "warning")
+    else:
+        flash("Test gesendet: Event vorrat_kochtimer_fertig + sensor.vorrat_kochtimer = fertig"
+              + (f" + notify.{dienst}" if dienst else "") + ".", "success")
+    return redirect(url_for("einstellungen"))
+
 def ha_sensoren_aktualisieren():
     """Schreibt Vorrats-Statistiken als Sensoren in Home Assistant."""
     import threading, time
@@ -3061,6 +3231,10 @@ def ha_sensoren_aktualisieren():
                         "icon": "mdi:food-variant",
                     })
 
+                    # Kochtimer-Sensor mitziehen (idle/läuft/fertig) – so existiert er immer,
+                    # auch nach einem HA-Neustart (REST-States sind sonst flüchtig)
+                    kochtimer_sensor_aktualisieren()
+
                     print(f"HA Sensoren aktualisiert: {len(abgelaufen)} abgelaufen, {len(bald)} bald, {len(unter_min)} unter Min., {einkauf_offen} Einkauf offen, {tiefkuehl} TK, {eingekocht_n} EK.", flush=True)
 
             except Exception as e:
@@ -3127,6 +3301,8 @@ def db_migrieren():
             ("theme", "VARCHAR(20) DEFAULT 'light'"),
             ("farbe", "VARCHAR(20) DEFAULT 'blau'"),
             ("kalender_entity", "VARCHAR(100) DEFAULT ''"),
+            ("timer_notify", "VARCHAR(100) DEFAULT ''"),
+            ("timer_text", "VARCHAR(200) DEFAULT ''"),
         ]:
             if tabelle_existiert("einstellungen") and not spalte_existiert("einstellungen", spalte):
                 cur.execute(f"ALTER TABLE einstellungen ADD COLUMN {spalte} {typ}")

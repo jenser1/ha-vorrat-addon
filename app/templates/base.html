@@ -544,5 +544,217 @@
   </a>
 </nav>
 
+<!-- ===== Globaler Küchen-Timer (auf jeder Seite) ===== -->
+<style>
+  .timer-fab{ position:fixed; right:16px; bottom:calc(var(--nav-h) + var(--safe-bottom) + 16px);
+    z-index:2000; display:inline-flex; align-items:center; gap:6px; background:var(--primary); color:#fff;
+    border:none; border-radius:999px; padding:14px 16px; font-size:1.15rem; font-weight:700; cursor:pointer;
+    box-shadow:0 4px 14px rgba(0,0,0,0.25); font-variant-numeric:tabular-nums; }
+  .timer-fab.laeuft{ padding:12px 18px; font-size:1rem; }
+  .timer-fab:active{ transform:scale(0.96); }
+  .timer-modal{ display:none; position:fixed; inset:0; z-index:4000; background:rgba(0,0,0,0.5);
+    align-items:center; justify-content:center; padding:16px; }
+  .timer-box{ background:var(--card); color:var(--text); border-radius:16px; padding:18px;
+    width:100%; max-width:420px; box-shadow:0 10px 40px rgba(0,0,0,0.3); }
+  .timer-kopf{ display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+  .timer-titel{ font-weight:700; font-size:1.05rem; }
+  .timer-x{ width:38px; height:38px; border-radius:10px; border:1px solid var(--border);
+    background:var(--bg); color:var(--text); font-size:1.1rem; cursor:pointer; }
+  .timer-btns{ display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:10px; }
+  .timer-btns button{ border:1px solid var(--border); background:var(--bg); color:var(--text);
+    border-radius:999px; padding:9px 15px; font-size:0.95rem; font-weight:600; cursor:pointer; }
+  .timer-btns button:active{ opacity:0.7; }
+  .timer-custom{ display:flex; gap:8px; justify-content:center; margin-top:4px; }
+  .timer-custom input{ width:110px; padding:9px 10px; border:1px solid var(--border); border-radius:8px;
+    background:var(--bg); color:var(--text); font-size:0.95rem; }
+  .timer-label{ text-align:center; color:var(--muted); font-size:0.9rem; }
+  .timer-zeit{ text-align:center; font-size:clamp(2.6rem,12vw,3.6rem); font-weight:800;
+    font-variant-numeric:tabular-nums; line-height:1.1; margin:6px 0 14px; }
+  .timer-run-btns{ display:flex; gap:10px; justify-content:center; }
+  .timer-run-btns .btn{ min-height:50px; padding:0 22px; }
+  @media (min-width: 768px){ .timer-fab{ bottom:24px; right:24px; } }
+</style>
+
+<button id="timer-fab" class="timer-fab" onclick="timerModalOeffnen()" aria-label="Küchen-Timer" title="Küchen-Timer">
+  <span id="timer-fab-icon">⏲️</span><span id="timer-fab-zeit" hidden></span>
+</button>
+
+<div id="timer-modal" class="timer-modal" onclick="if(event.target===this){ timerModalSchliessen(); }">
+  <div class="timer-box">
+    <div class="timer-kopf">
+      <span class="timer-titel">⏲️ Küchen-Timer</span>
+      <button type="button" class="timer-x" onclick="timerModalSchliessen()" aria-label="Schließen">✕</button>
+    </div>
+    <div id="timer-setup">
+      <div id="timer-extra" class="timer-btns" hidden></div>
+      <div class="timer-btns">
+        <button type="button" onclick="timerStart(300,'5 Min')">5 Min</button>
+        <button type="button" onclick="timerStart(600,'10 Min')">10 Min</button>
+        <button type="button" onclick="timerStart(900,'15 Min')">15 Min</button>
+        <button type="button" onclick="timerStart(1200,'20 Min')">20 Min</button>
+        <button type="button" onclick="timerStart(1800,'30 Min')">30 Min</button>
+        <button type="button" onclick="timerStart(2700,'45 Min')">45 Min</button>
+        <button type="button" onclick="timerStart(3600,'60 Min')">60 Min</button>
+      </div>
+      <div class="timer-custom">
+        <input type="number" id="timer-min" min="1" max="360" placeholder="Min" inputmode="numeric">
+        <button type="button" class="btn btn-primary" onclick="timerStartCustom()">Start</button>
+      </div>
+    </div>
+    <div id="timer-run" hidden>
+      <div id="timer-label" class="timer-label"></div>
+      <div id="timer-zeit" class="timer-zeit">00:00</div>
+      <div class="timer-run-btns">
+        <button type="button" class="btn btn-ghost" onclick="timerPlus(60)">+1 Min</button>
+        <button type="button" class="btn btn-danger" onclick="timerStop()">⏹ Stopp</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var TIMER_START_URL  = "{{ url_for('kochtimer_start') }}";
+var TIMER_STOP_URL   = "{{ url_for('kochtimer_stop') }}";
+var TIMER_STATUS_URL = "{{ url_for('kochtimer_status') }}";
+var timerEnde = 0, timerInterval = null, timerLabel = '', timerAudioCtx = null, timerLaeuft = false;
+
+function timerCsrf(){ var m = document.querySelector('meta[name="csrf-token"]'); return m ? m.getAttribute('content') : ''; }
+function timerMMSS(sek){ if(sek < 0){ sek = 0; } var m = Math.floor(sek/60), s = sek % 60; return (m<10?'0':'')+m+':'+(s<10?'0':'')+s; }
+
+function timerFabSync(){
+  var fab = document.getElementById('timer-fab');
+  if(!fab){ return; }
+  var km = document.getElementById('kochmodus');
+  fab.hidden = !!(km && km.classList.contains('offen'));
+}
+function timerIndikatoren(rest){
+  var txt = timerMMSS(rest);
+  var fab = document.getElementById('timer-fab'), fz = document.getElementById('timer-fab-zeit');
+  if(fab && fz){
+    if(timerLaeuft){ fz.hidden = false; fz.textContent = txt; fab.classList.add('laeuft'); }
+    else { fz.hidden = true; fab.classList.remove('laeuft'); }
+  }
+  var chip = document.getElementById('koch-timer-chip');
+  if(chip){ chip.hidden = !timerLaeuft; }
+  var cz = document.getElementById('koch-timer-chip-zeit'); if(cz){ cz.textContent = txt; }
+  var z = document.getElementById('timer-zeit'); if(z){ z.textContent = txt; }
+  timerFabSync();
+}
+function timerAudioInit(){
+  try{
+    if(!timerAudioCtx){ timerAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    if(timerAudioCtx.state === 'suspended'){ timerAudioCtx.resume(); }
+  }catch(e){}
+}
+function timerBeep(){
+  try{
+    if(!timerAudioCtx){ timerAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    var n = 0;
+    (function pieps(){
+      if(n >= 5){ return; }
+      var o = timerAudioCtx.createOscillator(), g = timerAudioCtx.createGain();
+      o.connect(g); g.connect(timerAudioCtx.destination); o.type = 'sine'; o.frequency.value = 880;
+      var t = timerAudioCtx.currentTime;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+      o.start(t); o.stop(t + 0.42);
+      n++; setTimeout(pieps, 500);
+    })();
+  }catch(e){}
+  try{ if(navigator.vibrate){ navigator.vibrate([300,150,300,150,300]); } }catch(e){}
+}
+function timerRunAnzeige(){
+  timerLaeuft = true;
+  var s = document.getElementById('timer-setup'), r = document.getElementById('timer-run');
+  if(s){ s.hidden = true; } if(r){ r.hidden = false; }
+  var l = document.getElementById('timer-label'); if(l){ l.textContent = timerLabel || 'Timer'; }
+  timerTick();
+  if(timerInterval){ clearInterval(timerInterval); }
+  timerInterval = setInterval(timerTick, 500);
+}
+function timerIdleAnzeige(){
+  if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
+  timerLaeuft = false;
+  var s = document.getElementById('timer-setup'), r = document.getElementById('timer-run');
+  if(r){ r.hidden = true; } if(s){ s.hidden = false; }
+  timerIndikatoren(0);
+}
+function timerTick(){
+  var rest = Math.round((timerEnde - Date.now()) / 1000);
+  if(rest < 0){ rest = 0; }
+  timerIndikatoren(rest);
+  if(rest <= 0){ timerAbgelaufen(); }
+}
+function timerAbgelaufen(){
+  if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
+  var z = document.getElementById('timer-zeit'); if(z){ z.textContent = 'Fertig! ⏰'; }
+  var cz = document.getElementById('koch-timer-chip-zeit'); if(cz){ cz.textContent = 'fertig'; }
+  var fz = document.getElementById('timer-fab-zeit'); if(fz){ fz.textContent = 'fertig'; }
+  timerBeep();
+  setTimeout(timerIdleAnzeige, 20000);
+}
+function timerStart(sekunden, label){
+  sekunden = parseInt(sekunden, 10);
+  if(!sekunden || sekunden < 1){ return; }
+  timerAudioInit();
+  timerLabel = label || '';
+  timerEnde = Date.now() + sekunden * 1000;
+  timerRunAnzeige();
+  var body = 'sekunden=' + sekunden + '&label=' + encodeURIComponent(label || '') +
+             '&rezept=' + encodeURIComponent(window.TIMER_REZEPT || '');
+  fetch(TIMER_START_URL, { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'X-CSRF-Token': timerCsrf() }, body: body })
+    .then(function(r){ return r.json(); })
+    .then(function(d){ if(d && d.ende){ timerEnde = d.ende * 1000; timerTick(); } })
+    .catch(function(){});
+}
+function timerStartCustom(){
+  var el = document.getElementById('timer-min');
+  var min = parseInt(el && el.value, 10);
+  if(min && min > 0){ timerStart(min * 60, min + ' Min'); }
+}
+function timerPlus(sek){
+  if(timerEnde < Date.now()){ timerEnde = Date.now(); }
+  timerStart(Math.round((timerEnde - Date.now()) / 1000) + sek, timerLabel);
+}
+function timerStop(){
+  timerIdleAnzeige();
+  fetch(TIMER_STOP_URL, { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'X-CSRF-Token': timerCsrf() }, body: '' }).catch(function(){});
+}
+function timerSync(){
+  fetch(TIMER_STATUS_URL).then(function(r){ return r.json(); }).then(function(d){
+    if(d && d.aktiv && d.rest > 0){ timerLabel = d.label || ''; timerEnde = Date.now() + d.rest * 1000; timerRunAnzeige(); }
+    else { timerIdleAnzeige(); }
+  }).catch(function(){});
+}
+function timerModalOeffnen(extra){
+  var m = document.getElementById('timer-modal'); if(!m){ return; }
+  var box = document.getElementById('timer-extra');
+  if(box){
+    box.innerHTML = '';
+    if(extra && extra.length){
+      for(var i = 0; i < extra.length; i++){
+        (function(p){
+          var b = document.createElement('button');
+          b.type = 'button'; b.textContent = p.text;
+          b.onclick = function(){ timerStart(p.sek, p.label); };
+          box.appendChild(b);
+        })(extra[i]);
+      }
+      box.hidden = false;
+    } else { box.hidden = true; }
+  }
+  m.style.display = 'flex';
+  timerAudioInit();
+}
+function timerModalSchliessen(){ var m = document.getElementById('timer-modal'); if(m){ m.style.display = 'none'; } }
+
+document.addEventListener('keydown', function(e){
+  var m = document.getElementById('timer-modal');
+  if(e.key === 'Escape' && m && m.style.display === 'flex'){ timerModalSchliessen(); }
+});
+document.addEventListener('DOMContentLoaded', function(){ timerFabSync(); timerSync(); });
+</script>
+
 </body>
 </html>

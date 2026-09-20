@@ -188,12 +188,18 @@ document.getElementById('essensplan-modal').addEventListener('click', function(e
   .koch-nav{ flex:1; min-height:58px; font-size:1.05rem; font-weight:700; }
   .koch-zutaten-btn{ flex:none; min-height:58px; font-size:1.3rem; padding:0 16px; }
   .koch-nav:disabled{ opacity:0.4; }
+  .koch-timer-chip{ flex:none; display:inline-flex; align-items:center; gap:5px; border:1px solid var(--primary);
+                    background:transparent; color:var(--primary); font-weight:700; font-size:0.9rem;
+                    border-radius:999px; padding:5px 12px; cursor:pointer; font-variant-numeric:tabular-nums; }
 </style>
 
 <div id="kochmodus" class="kochmodus" aria-hidden="true">
   <div class="koch-head">
-    <div class="koch-titel">👨‍🍳 {{ rezept.name }}</div>
-    <button type="button" class="koch-close" onclick="kochmodusSchliessen()" aria-label="Kochmodus schließen">✕</button>
+    <div class="koch-titel" style="flex:1; min-width:0;">👨‍🍳 {{ rezept.name }}</div>
+    <div style="display:flex; align-items:center; gap:10px; flex:none;">
+      <button type="button" id="koch-timer-chip" class="koch-timer-chip" hidden onclick="timerModalOeffnen(KOCH_PRESETS)">⏲️ <span id="koch-timer-chip-zeit">00:00</span></button>
+      <button type="button" class="koch-close" onclick="kochmodusSchliessen()" aria-label="Kochmodus schließen">✕</button>
+    </div>
   </div>
   <div class="koch-progress"><div id="koch-progress-fill" class="koch-progress-fill"></div></div>
   {% if rezept.vorbereitungszeit or rezept.kochzeit or rezept.gesamtzeit %}
@@ -226,6 +232,7 @@ document.getElementById('essensplan-modal').addEventListener('click', function(e
     {% if abgleich %}
     <button type="button" class="btn btn-ghost koch-zutaten-btn" onclick="kochZutatenToggle()" aria-label="Zutaten anzeigen">🧺</button>
     {% endif %}
+    <button type="button" class="btn btn-ghost koch-zutaten-btn" onclick="timerModalOeffnen(KOCH_PRESETS)" aria-label="Timer">⏲️</button>
     <button type="button" id="koch-weiter" class="btn btn-primary koch-nav" onclick="kochSchritt(1)">Weiter ▶</button>
   </div>
 </div>
@@ -308,6 +315,7 @@ function kochmodusOeffnen(){
   kochOffen = true;
   kochRender();
   kochWakeLockAn();
+  timerFabSync();
 }
 
 function kochmodusSchliessen(){
@@ -318,6 +326,7 @@ function kochmodusSchliessen(){
   document.body.style.overflow = '';
   kochOffen = false;
   kochWakeLockAus();
+  timerFabSync();
 }
 
 function kochZutatenToggle(){
@@ -353,6 +362,14 @@ document.addEventListener('DOMContentLoaded', function(){
   var ov = document.getElementById('kochmodus');
   if(ov && ov.parentNode !== document.body){ document.body.appendChild(ov); }
 });
+
+// ===== Timer-Presets aus den Rezeptzeiten (nutzt den globalen Timer aus base.html) =====
+window.TIMER_REZEPT = {{ rezept.name|tojson }};
+var KOCH_PRESETS = [
+  {%- if rezept.kochzeit %} { sek: {{ rezept.kochzeit * 60 }}, text: "\u{1F373} {{ rezept.kochzeit|dauer }}", label: "Kochen/Backen" },{% endif %}
+  {%- if rezept.vorbereitungszeit %} { sek: {{ rezept.vorbereitungszeit * 60 }}, text: "\u23F1\uFE0F {{ rezept.vorbereitungszeit|dauer }}", label: "Vorbereitung" },{% endif %}
+  {%- if rezept.gesamtzeit %} { sek: {{ rezept.gesamtzeit * 60 }}, text: "\u23F0 {{ rezept.gesamtzeit|dauer }}", label: "Gesamt" },{% endif %}
+];
 </script>
 {% endif %}
 

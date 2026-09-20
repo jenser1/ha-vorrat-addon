@@ -39,6 +39,13 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **⏱️ Zeitangaben**: Vorbereitungs-, Koch-/Back- und Gesamtzeit – beim Web-/Text-Import automatisch übernommen, auf der Rezeptseite und im Kochmodus angezeigt
 - Filter und Sortierung nach Kategorie
 
+### ⏲️ Küchen-Timer
+- **Überall startbar**: ⏲️-Knopf unten rechts auf jeder Seite – Presets (5–60 Min) oder freie Minuten
+- **Im Kochmodus** zusätzlich Schnellwahl aus den Rezeptzeiten (Vorbereitung / Kochen / Gesamt)
+- **Läuft im Add-on**, nicht im Browser: Seite wechseln oder Tab schließen – der Timer läuft weiter
+- Beim Ablauf: Piepton/Vibration im Browser **und** Meldung an Home Assistant → Event `vorrat_kochtimer_fertig` + `sensor.vorrat_kochtimer`
+- Optional **direkte Handy-Push** (notify-Dienst in den Einstellungen wählbar) – oder eigene Automation (Klingeln, Sprachansage, Wecker, …), siehe unten
+
 ### 📅 Essensplaner
 - Wochenansicht mit **Frühstück / Mittag / Abend**
 - Pro Mahlzeit: vorhandenes Rezept **oder** eigener Freitext
@@ -59,6 +66,7 @@ Automatisch verfügbare HA-Sensoren:
 | `sensor.vorrat_einkaufsliste` | Offene Artikel in Einkaufslisten |
 | `sensor.vorrat_tiefkuehl` | Anzahl eingefrorener Produkte |
 | `sensor.vorrat_eingekocht` | Anzahl eingekochter Produkte |
+| `sensor.vorrat_kochtimer` | Küchen-Timer: `idle` / `läuft` / `fertig` (Attribute: Label, Rezept, Restzeit) |
 
 ### 🌍 Mehrsprachig & Mehrere Währungen
 - Sprachen: Deutsch, Englisch, Französisch, Spanisch
@@ -95,6 +103,64 @@ entities:
   - sensor.vorrat_bald_ablaufend
   - sensor.vorrat_einkaufsliste
   # … weitere Sensoren aus der Tabelle oben
+```
+
+---
+
+## ⏲️ Küchen-Timer → Home Assistant
+
+Läuft ein Timer ab, meldet das Add-on das an Home Assistant – auf **jeder** Installation gleich:
+- **Event** `vorrat_kochtimer_fertig` (Daten: `label`, `rezept`, `sekunden`)
+- **Sensor** `sensor.vorrat_kochtimer`: `idle` → `läuft` → `fertig` (bleibt 10 Min) → `idle`
+
+**Einstellungen → „⏲️ Küchen-Timer → Home Assistant":** Handy für die direkte Push wählen (die Liste kommt aus deinem eigenen HA), Nachrichtentext mit `{label}`, `{rezept}`, `{zeit}` anpassen – und mit **🔔 Test senden** alles sofort auslösen, ohne auf einen Timer zu warten.
+
+> 💡 Das Event taucht in HA in keiner Liste auf (Events existieren nur im Moment des Feuerns). Einfacher: den **Sensor** als Auslöser nehmen – der ist im Automations-Editor auswählbar.
+
+### Beispiel 1: Handy laut klingeln lassen
+Durchbricht Lautlos / „Nicht stören" – Android über den Wecker-Kanal, iPhone als kritische Mitteilung (einmalig in der App erlauben). Beides in einer Automation; jedes Handy nimmt sich, was es versteht:
+
+```yaml
+alias: ⏲️ Kochtimer – Handy klingeln lassen
+mode: single
+triggers:
+  - trigger: state
+    entity_id: sensor.vorrat_kochtimer
+    to: fertig
+actions:
+  - action: notify.mobile_app_DEIN_HANDY
+    data:
+      title: "⏲️ Kochtimer fertig!"
+      message: "{{ state_attr('sensor.vorrat_kochtimer', 'label') or 'Timer' }} ist abgelaufen"
+      data:
+        ttl: 0
+        priority: high
+        channel: alarm_stream        # Android: Wecker-Kanal
+        importance: high
+        sticky: true
+        tag: kochtimer
+        push:                        # iPhone: kritische Mitteilung
+          sound:
+            name: default
+            critical: 1
+            volume: 1.0
+```
+Tipp Android: *Einstellungen → Apps → Home Assistant → Benachrichtigungen → alarm_stream* → einen Klingelton wählen, dann klingelt es wie ein Wecker. Nutzt du diese Automation, die direkte Push im Add-on auf „keine" stellen (sonst kommen zwei Nachrichten).
+
+### Beispiel 2: Sprachansage auf einem Lautsprecher
+```yaml
+alias: ⏲️ Kochtimer – Ansage
+triggers:
+  - trigger: state
+    entity_id: sensor.vorrat_kochtimer
+    to: fertig
+actions:
+  - action: tts.speak
+    target:
+      entity_id: tts.DEINE_TTS_ENGINE
+    data:
+      media_player_entity_id: media_player.DEIN_LAUTSPRECHER
+      message: "Der Kochtimer {{ state_attr('sensor.vorrat_kochtimer', 'label') }} ist fertig."
 ```
 
 ---
@@ -142,6 +208,12 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 ---
 
 ## 📝 Changelog
+
+### 1.7.0
+- ⏲️ **Küchen-Timer**: überall startbar (⏲️-Knopf unten rechts) mit Presets oder freien Minuten; im Kochmodus zusätzlich Schnellwahl aus den Rezeptzeiten. Läuft im Add-on – Seitenwechsel oder Tab schließen egal. Piepton/Vibration im Browser, +1 Min, Stopp
+- 🏠 **Home-Assistant-Anbindung**: beim Ablauf Event `vorrat_kochtimer_fertig` + neuer Sensor `sensor.vorrat_kochtimer` (idle/läuft/fertig, überlebt HA-Neustarts). Optional direkte Handy-Push – notify-Dienst wird aus der jeweiligen HA-Installation gelistet, Nachrichtentext mit Platzhaltern
+- 🔔 **Test-Button** in den Einstellungen (Event + Sensor + Push sofort auslösen) und README-Beispiele für „Handy klingeln lassen" und Sprachansage
+- 🩹 HA-Aufrufe prüfen jetzt den HTTP-Status und loggen Fehler; Timer-Start/-Ablauf im Add-on-Log sichtbar
 
 ### 1.6.6
 - ⏱️ **Zeitangaben** pro Rezept: Vorbereitung, Kochen/Backen und Gesamt (in Minuten). Beim Web-Import automatisch aus der Seite übernommen (schema.org `prepTime`/`cookTime`/`totalTime`, auch ISO-Format), beim Text-Import aus Zeilen wie „Zubereitungszeit: 30 min" erkannt, manuell eintragbar – angezeigt auf der Rezeptseite und im Kochmodus

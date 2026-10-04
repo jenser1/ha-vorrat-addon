@@ -2,6 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, flash, g, 
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
 import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal, secrets, hmac
+import ipaddress, socket
+from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from translations import TRANSLATIONS, CURRENCIES, LANGUAGES, get_translation, format_currency
 
@@ -39,6 +41,8 @@ app.secret_key = _secret_key_laden()
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_PATH}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB Upload-Limit
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # zweite Verteidigungslinie neben dem CSRF-Token
 
 # Produktbilder neben der DB ablegen (im Add-on /share/vorratsverwaltung/bilder)
 BILDER_DIR = os.path.join(os.path.dirname(DB_PATH) or ".", "bilder")
@@ -1182,7 +1186,9 @@ def produkt_off_import(id):
     bild_ok = True
     if daten["bild_url"]:
         try:
-            ir = requests.get(daten["bild_url"], headers=HEADERS, timeout=(4, 12), stream=True)
+            # Bild-URL stammt aus Fremddaten (Open Food Facts) -> gleicher SSRF-Schutz wie
+            # Web-Import, inkl. Prüfung jeder Weiterleitung
+            ir = _get_sicher(daten["bild_url"], timeout=(4, 12))
             ir.raise_for_status()
             # Größe begrenzen: MAX_CONTENT_LENGTH schützt nur Uploads, nicht diesen Download
             angekuendigt = ir.headers.get("Content-Length")
@@ -2461,19 +2467,97 @@ def rezept_aus_text(text):
         "quelle": "text",
     }
 
+# ── SSRF-Schutz für alle Abrufe fremder URLs ─────────────────────────────────
+MAX_SEITE_BYTES = 5 * 1024 * 1024  # Obergrenze für heruntergeladene Webseiten
+_GESPERRTE_HOSTS = {"localhost", "supervisor", "homeassistant", "hassio", "observer", "core-ssh"}
+
+def url_sicher(url):
+    """Erlaubt nur http(s) zu öffentlichen Adressen. Blockt Loopback/private/link-local
+    Netze und HA-interne Hostnamen – sonst könnte ein Nutzer über den Web-Import interne
+    Dienste (Supervisor, andere Add-ons, LAN-Geräte) abfragen. Gibt (ok, grund) zurück."""
+    try:
+        u = urlparse(url)
+    except Exception:
+        return False, "ungültige URL"
+    if u.scheme not in ("http", "https"):
+        return False, "nur http/https erlaubt"
+    host = (u.hostname or "").lower().rstrip(".")
+    if not host:
+        return False, "kein Host"
+    if host in _GESPERRTE_HOSTS or host.endswith((".local", ".internal", ".hass.io", ".localhost")):
+        return False, "interner Host gesperrt"
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
+        return False, "Host nicht auflösbar"
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False, "ungültige Adresse"
+        if ip.version == 6 and ip.ipv4_mapped:   # ::ffff:127.0.0.1 tarnt Loopback
+            ip = ip.ipv4_mapped
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast
+                or ip.is_reserved or ip.is_unspecified):
+            return False, "interne Adresse gesperrt"
+    return True, ""
+
+def _get_sicher(url, timeout, max_redirects=4):
+    """GET (gestreamt) mit SSRF-Prüfung für die Start-URL UND jede Weiterleitung –
+    ein öffentlicher Link darf nicht auf eine interne Adresse umleiten."""
+    for _ in range(max_redirects + 1):
+        ok, grund = url_sicher(url)
+        if not ok:
+            raise ValueError(f"URL abgelehnt ({grund})")
+        resp = requests.get(url, headers=HEADERS, timeout=timeout, stream=True, allow_redirects=False)
+        if resp.is_redirect or resp.is_permanent_redirect:
+            ziel = resp.headers.get("Location", "")
+            resp.close()
+            if not ziel:
+                raise ValueError("Weiterleitung ohne Ziel")
+            url = urljoin(url, ziel)
+            continue
+        return resp
+    raise ValueError("zu viele Weiterleitungen")
+
+def seite_laden(url, max_bytes=MAX_SEITE_BYTES):
+    """Lädt eine Webseite SSRF-sicher und größenbegrenzt (Abbruch beim Überschreiten).
+    Liefert den dekodierten Text."""
+    resp = _get_sicher(url, timeout=15)
+    try:
+        resp.raise_for_status()
+        angekuendigt = resp.headers.get("Content-Length", "")
+        if angekuendigt.isdigit() and int(angekuendigt) > max_bytes:
+            raise ValueError("Seite zu groß")
+        teile, groesse = [], 0
+        for chunk in resp.iter_content(64 * 1024):
+            groesse += len(chunk)
+            if groesse > max_bytes:
+                raise ValueError("Seite zu groß")
+            teile.append(chunk)
+        inhalt = b"".join(teile)
+        enc = resp.encoding
+        try:  # wie resp.apparent_encoding – Server-Angaben sind oft falsch
+            enc = requests.compat.chardet.detect(inhalt).get("encoding") or enc
+        except Exception:
+            pass
+        return inhalt.decode(enc or "utf-8", errors="replace")
+    finally:
+        resp.close()
+
 def rezept_von_url(url):
     """Hauptfunktion: Lädt URL und extrahiert Rezept."""
     if not url.startswith("http"):
         url = "https://" + url
 
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = resp.apparent_encoding
+        html_text = seite_laden(url)
+    except ValueError as e:
+        return None, f"Seite konnte nicht geladen werden: {e}"
     except requests.RequestException as e:
         return None, f"Seite konnte nicht geladen werden: {e}"
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    soup = BeautifulSoup(html_text, "html.parser")
     domain = url.lower()
 
     def beschreibung_ergaenzen(ergebnis, soup):
@@ -2535,8 +2619,8 @@ def rezept_web_import():
         }
 
     if request.method == "POST":
-        text = (request.form.get("text") or "").strip()
-        url = (request.form.get("url") or "").strip()
+        text = (request.form.get("text") or "").strip()[:200_000]  # 200 KB reichen für jedes Rezept
+        url = (request.form.get("url") or "").strip()[:2000]
         if text:
             ergebnis = rezept_aus_text(text) or {
                 "titel": "", "beschreibung": "", "portionen": 4,
@@ -2756,9 +2840,14 @@ def einstellungen():
         if "kalender_entity" in request.form:
             s.kalender_entity = request.form.get("kalender_entity", "").strip()
         if "timer_notify" in request.form:
-            s.timer_notify = request.form.get("timer_notify", "").strip()
+            dienst = request.form.get("timer_notify", "").strip().lower()[:100]
+            if dienst and not NOTIFY_DIENST_RE.match(dienst):
+                flash("Ungültiger notify-Dienstname – erlaubt sind nur Kleinbuchstaben, Ziffern und _ "
+                      "(z. B. mobile_app_handy).", "danger")
+                return redirect(url_for("einstellungen"))
+            s.timer_notify = dienst
         if "timer_text" in request.form:
-            s.timer_text = request.form.get("timer_text", "").strip()
+            s.timer_text = request.form.get("timer_text", "").strip()[:200]
         db.session.commit()
         flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("einstellungen"))
@@ -2978,9 +3067,15 @@ def ha_event_feuern(event_type, daten=None):
     """Feuert ein HA-Event."""
     return _ha_post(f"events/{event_type}", daten or {}, f"Event ({event_type})")
 
+NOTIFY_DIENST_RE = re.compile(r"^[a-z0-9_]{1,100}$")  # HA-Dienstnamen: nur a-z, 0-9, _
+
 def ha_notify_senden(dienst, titel, nachricht):
-    """Ruft notify.<dienst> auf (nur wenn konfiguriert)."""
+    """Ruft notify.<dienst> auf (nur wenn konfiguriert). Der Name landet im API-Pfad,
+    darum strikt validieren – kein '/', '..' o.ä."""
     if not dienst:
+        return False
+    if not NOTIFY_DIENST_RE.match(dienst):
+        print(f"HA Notify: ungültiger Dienstname '{dienst[:40]}' – abgelehnt", flush=True)
         return False
     return _ha_post(f"services/notify/{dienst}", {"title": titel, "message": nachricht},
                     f"Notify ({dienst})")
@@ -2989,10 +3084,11 @@ def timer_nachricht(vorlage, label, rezept, sekunden):
     """Baut den Benachrichtigungstext (Platzhalter {label}/{rezept}/{zeit})."""
     zeit = minuten_formatiert(round(sekunden / 60)) or f"{sekunden} s"
     if vorlage:
-        try:
-            return vorlage.format(label=label or "", rezept=rezept or "", zeit=zeit)
-        except Exception:
-            return vorlage
+        # Bewusst KEIN str.format(): eine Vorlage könnte damit über {label.__class__...}
+        # Objekt-Interna auslesen. Einfaches Ersetzen der drei Platzhalter ist sicher.
+        return (vorlage.replace("{label}", label or "")
+                       .replace("{rezept}", rezept or "")
+                       .replace("{zeit}", zeit))
     return "⏲️ Kochtimer fertig" + (f" – {label}" if label else "")
 
 _kochtimer_lock = threading.Lock()

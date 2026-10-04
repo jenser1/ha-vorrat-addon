@@ -1,5 +1,8 @@
 FROM python:3.11-alpine
 
+LABEL maintainer="Jens <150123042+jenser1@users.noreply.github.com>" \
+      org.opencontainers.image.authors="Jens <150123042+jenser1@users.noreply.github.com>"
+
 # Install bash
 RUN apk add --no-cache bash
 

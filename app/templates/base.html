@@ -8,6 +8,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#1e293b">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icon-192.png') }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
   <title>{% block title %}Vorrat{% endblock %}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -439,7 +442,7 @@
 <!-- Desktop Sidebar (nur ab 768px sichtbar) -->
 <nav class="sidebar" style="display:none">
   <div class="sidebar-logo">
-    <span>🥫</span>
+    <img src="{{ url_for('static', filename='icon-192.png') }}" alt="" style="width:32px; height:32px; flex:none;">
     <span>Vorratsverwaltung</span>
   </div>
 
@@ -485,7 +488,7 @@
   <!-- Topbar -->
   <div class="topbar">
     <div class="topbar-left">
-      <span class="topbar-logo">🥫</span>
+      <img src="{{ url_for('static', filename='icon-192.png') }}" alt="" class="topbar-logo" style="width:28px; height:28px;">
       <h1>{% block page_title %}Vorrat{% endblock %}</h1>
     </div>
     <div class="topbar-actions">{% block topbar_actions %}{% endblock %}</div>

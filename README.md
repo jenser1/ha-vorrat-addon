@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jenser1/ha-vorrat-addon/main/logo.png" width="260" alt="ha-vorrat addon Logo">
+</p>
+
 # 🥫 Vorratsverwaltung – Home Assistant Add-on
 
 [![PayPal](https://img.shields.io/badge/Sponsor-PayPal-blue?logo=paypal)](https://paypal.me/jenser1)
@@ -205,9 +209,17 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 **Ideen & Feature-Wünsche** sind ebenfalls willkommen – einfach als Issue mit dem Label `enhancement` eintragen.
 
+👤 **Maintainer:** Jens ([@jenser1](https://github.com/jenser1))
+
 ---
 
 ## 📝 Changelog
+
+### 1.7.1
+- 🔒 **Sicherheit**: Web-Import und Bild-Download prüfen jetzt jede Adresse – auch Weiterleitungen – und verweigern interne Ziele. Home-Assistant-Supervisor, andere Add-ons und Geräte im Heimnetz sind über den Import nicht mehr erreichbar (SSRF-Schutz); Seitenabruf auf 5 MB begrenzt
+- 🔒 notify-Dienstname wird streng geprüft, Nachrichtenvorlage ohne Format-String-Auswertung, Session-Cookie mit `SameSite=Lax` + `HttpOnly`, Eingabelängen begrenzt
+- 🎨 **Neues Logo**: Add-on-Icon im Store und in der HA-Seitenleiste, Logo auf der Infoseite und in der README, Favicon, Homescreen-Icons für iPhone und Android; PWA-Manifest funktioniert jetzt auch hinter Ingress (relative Pfade)
+- 👤 Maintainer-Angaben in `repository.json` und im Container-Image; Security-Policy auf 1.7.x aktualisiert
 
 ### 1.7.0
 - ⏲️ **Küchen-Timer**: überall startbar (⏲️-Knopf unten rechts) mit Presets oder freien Minuten; im Kochmodus zusätzlich Schnellwahl aus den Rezeptzeiten. Läuft im Add-on – Seitenwechsel oder Tab schließen egal. Piepton/Vibration im Browser, +1 Min, Stopp

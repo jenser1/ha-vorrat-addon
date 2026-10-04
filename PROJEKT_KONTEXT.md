@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.7.0
+**Aktuelle Version:** 1.7.1
 
 ---
 
@@ -27,6 +27,8 @@ ha-vorrat-addon/
 ├── hacs.json
 ├── SECURITY.md
 ├── README.md
+├── repository.json      # HA-Repository-Metadaten (name, url, maintainer)
+├── icon.png / logo.png  # Add-on-Icon (Store/Seitenleiste) + Logo (Infoseite/README)
 └── app/
     ├── app.py           # Flask-App (alle Routen & Logik)
     ├── translations.py  # DE/EN/FR/ES Übersetzungen
@@ -107,6 +109,18 @@ Token pro Session (`csrf_token()`). `before_request` prüft POST/PUT/PATCH/DELET
 kein Template muss es selbst setzen. AJAX/JSON sendet es per `X-CSRF-Token`-Header
 (Meta-Tag in base.html). `SECRET_KEY`: ENV oder persistenter Zufallsschlüssel
 (`.secret_key` neben der DB), kein hartkodierter Default.
+Session-Cookie: `SameSite=Lax` + `HttpOnly`.
+
+### SSRF-Schutz & Härtung (seit 1.7.1)
+Jeder Abruf einer fremden URL (Web-Import, Open-Food-Facts-Bild) läuft über
+`_get_sicher()` → `url_sicher()`: nur http/https zu **öffentlichen** IPs; Loopback, private
+Netze, Link-Local, IPv4-in-IPv6 (`::ffff:127.0.0.1`) und HA-interne Hostnamen
+(`supervisor`, `*.local`, …) sind gesperrt – **jeder Redirect wird einzeln geprüft**
+(`allow_redirects=False`). `seite_laden()` streamt mit 5-MB-Limit (`MAX_SEITE_BYTES`).
+Neue Abrufe fremder URLs IMMER über `_get_sicher()`/`seite_laden()`, nie direkt `requests.get`.
+Weitere Regeln: notify-Dienstname gegen `NOTIFY_DIENST_RE` (`^[a-z0-9_]+$`, landet im API-Pfad),
+Nachrichtenvorlagen per `str.replace` statt `str.format` (Format-String-Injection),
+Eingabelängen begrenzt (Text-Import 200 KB, URL 2000 Zeichen).
 
 ### Gebinde-Funktion
 Produkte können eine Gebindegröße haben (z.B. 12 für 12er-Kiste).
@@ -212,6 +226,10 @@ DB_PATH=/tmp/vorrat.db python app.py
 2. Dateien auf GitHub ersetzen
 3. Release erstellen (z.B. v1.5.0)
 
+Git-Identität: repo-lokal `Jens <150123042+jenser1@users.noreply.github.com>` (verknüpft
+Commits mit dem GitHub-Account; die globale Identität auf dem PC ist „BuildTools" von Spigot –
+Commits bis v1.7.0 laufen deshalb noch unter diesem Namen).
+
 ---
 
 ## Häufige Fehler & Lösungen
@@ -226,6 +244,7 @@ DB_PATH=/tmp/vorrat.db python app.py
 | Web-Import „Kein Rezept gefunden" | Brotli-Antwort (br) nicht dekodierbar | Kein `br` in Accept-Encoding (nur gzip/deflate) |
 | Event `vorrat_kochtimer_fertig` „nicht da" | HA listet Custom-Events nirgends | Entwicklerwerkzeuge → Ereignisse lauschen, oder Sensor-Trigger `sensor.vorrat_kochtimer` → `fertig` |
 | REST-Sensor nach HA-Neustart weg | `POST /api/states` ist nicht persistent | Sensor regelmäßig neu setzen (5-Min-Schleife) |
+| Web-Import „URL abgelehnt (interne Adresse gesperrt)" | SSRF-Schutz (`url_sicher`) – gewollt | Nur öffentliche Rezeptseiten importierbar; LAN/HA-intern ist gesperrt |
 
 ---
 

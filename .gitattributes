@@ -1,0 +1,4 @@
+# Home Assistant schneidet die Update-Hinweise per Regex aus der CHANGELOG.md
+# ("## 1.8.0" direkt gefolgt von \n) – mit Windows-Zeilenenden (\r\n) greift das nicht
+# und HA zeigt den kompletten Changelog. Daher immer LF, auch im Windows-Arbeitsordner.
+CHANGELOG.md text eol=lf

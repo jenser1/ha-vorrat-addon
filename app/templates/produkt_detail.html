@@ -3,11 +3,15 @@
 {% block page_title %}{{ p.name }}{% endblock %}
 
 {% block topbar_actions %}
-  <a href="{{ url_for('index') }}" class="btn btn-ghost">← Übersicht</a>
-  <a href="{{ url_for('produkt_bearbeiten', id=p.id) }}" class="btn btn-ghost" style="margin-left:6px;">✏️ Bearbeiten</a>
+  <style>
+    /* Am Handy nur Symbole – sonst passen die drei Knöpfe nicht in die Kopfleiste */
+    @media (max-width: 520px) { .tb-text { display: none; } }
+  </style>
+  <a href="{{ zurueck_url }}" class="btn btn-ghost" title="Zur Übersicht" aria-label="Zur Übersicht">←<span class="tb-text"> Übersicht</span></a>
+  <a href="#bearbeiten" class="btn btn-ghost" style="margin-left:6px;" title="Zum Bearbeiten-Formular" aria-label="Bearbeiten">✏️<span class="tb-text"> Bearbeiten</span></a>
   <form method="post" action="{{ url_for('produkt_loeschen', id=p.id) }}" style="display:inline; margin-left:6px;"
         onsubmit='return confirm({{ (p.name ~ " wirklich löschen?") | tojson }})'>
-    <button type="submit" class="btn btn-ghost">🗑️ Löschen</button>
+    <button type="submit" class="btn btn-ghost" title="Löschen" aria-label="Löschen">🗑️<span class="tb-text"> Löschen</span></button>
   </form>
 {% endblock %}
 
@@ -32,11 +36,14 @@
         <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
           <span class="kat-tag">{{ p.kategorie }}</span>
           {% if p.lagerort %}<span style="font-size:0.82rem; color:var(--muted);">📍 {{ p.lagerort }}</span>{% endif %}
-          {% if p.ist_eingefroren %}<span style="font-size:0.78rem; color:#38bdf8; font-weight:600;">❄️ Tiefkühl{% if p.herkunft %} · {{ p.herkunft }}{% endif %}</span>{% elif p.ist_eingekocht %}<span style="font-size:0.78rem; color:#ea580c; font-weight:600;">🥫 Eingekocht{% if p.herkunft %} · {{ p.herkunft }}{% endif %}</span>{% endif %}
+          {% if p.ist_eingefroren %}<span style="font-size:0.78rem; color:#38bdf8; font-weight:600;">❄️ Tiefkühl{% if p.herkunft %} · {{ p.herkunft }}{% endif %}{% if p.konserv_datum %} · seit {{ p.konserv_datum.strftime('%d.%m.%Y') }}{% endif %}</span>{% elif p.ist_eingekocht %}<span style="font-size:0.78rem; color:#ea580c; font-weight:600;">🥫 Eingekocht{% if p.herkunft %} · {{ p.herkunft }}{% endif %}{% if p.konserv_datum %} · am {{ p.konserv_datum.strftime('%d.%m.%Y') }}{% endif %}</span>{% endif %}
+          {% if (p.ist_eingefroren or p.ist_eingekocht) and p.markierung %}<span title="Kennzeichnung" style="display:inline-block; padding:1px 9px; border-radius:6px; background:#e0f2fe; color:#075985; font-family:monospace; font-size:0.85rem;">{{ p.markierung }}</span>{% endif %}
+          {% if (p.ist_eingefroren or p.ist_eingekocht) and p.behaelter %}<span style="font-size:0.78rem; color:var(--muted);">· {{ p.behaelter }}</span>{% endif %}
         </div>
 
         {% if p.mhd %}
         <div style="margin-bottom:14px;">
+          <span style="font-size:0.78rem; color:var(--muted); margin-right:4px;">{{ 'Verbrauchen bis' if (p.ist_eingefroren or p.ist_eingekocht) else 'MHD' }}</span>
           <span class="mhd-badge mhd-{{ p.status }}">{{ p.mhd.strftime('%d.%m.%Y') }}</span>
           {% if p.tage_bis_mhd is not none %}
             <span style="font-size:0.82rem; color:var(--muted); margin-left:6px;">
@@ -66,6 +73,11 @@
           <span style="font-size:0.78rem; color:var(--muted); margin-left:6px;">📦 à {{ p.gebinde_wert }} = {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten</span>
           {% endif %}
         </div>
+        {% if p.inhalt_text %}
+        <div style="font-size:0.85rem; color:var(--muted); margin-bottom:4px;">
+          ⚖️ {{ p.inhalt_text }}{% if p.menge > 0 and p.menge != 1 %} · zusammen <strong style="color:var(--text);">{{ p.gesamt_text }}</strong>{% endif %}
+        </div>
+        {% endif %}
         {% if p.mindestmenge and p.mindestmenge > 0 %}
         <div style="font-size:0.78rem; color:var(--muted);">Mindestmenge: {{ p.mindestmenge|int if p.mindestmenge == p.mindestmenge|int else p.mindestmenge }} {{ p.einheit }}</div>
         {% endif %}
@@ -86,7 +98,7 @@
           </style>
           <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
             <span style="font-size:0.9rem; font-weight:700; color:#fb923c;">📦 Angebrochen</span>
-            <span style="font-size:0.85rem; color:var(--muted);"><strong id="anbruch-wert" style="color:{{ _col }}; font-size:1.15rem;">{{ p.anbruch_prozent }}</strong>&nbsp;% übrig</span>
+            <span style="font-size:0.85rem; color:var(--muted);"><strong id="anbruch-wert" style="color:{{ _col }}; font-size:1.15rem;">{{ p.anbruch_prozent }}</strong>&nbsp;% übrig{% if p.offen_text %} · <span id="anbruch-menge">{{ p.offen_text }}</span>{% endif %}</span>
           </div>
           <form method="post" action="{{ url_for('produkt_anbruch', id=p.id) }}" id="anbruch-form" style="margin:0;">
             <input type="hidden" name="aktion" value="set">
@@ -99,6 +111,15 @@
             </div>
           </form>
           <script>
+            // Inhalt einer ganzen Packung (Basis-Einheit) – für "noch 300 g" beim Ziehen
+            var ANBRUCH_INHALT = {{ (p.inhalt_basis[0] if p.inhalt_basis else 0)|tojson }};
+            var ANBRUCH_BASIS = {{ (p.inhalt_basis[1] if p.inhalt_basis else '')|tojson }};
+            function anbruchMengeText(rest){
+              function z(x, st){ var f = Math.pow(10, st); return String(Math.round(x * f) / f).replace('.', ','); }
+              if (ANBRUCH_BASIS === 'g') { return rest >= 1000 ? z(rest / 1000, 2) + ' kg' : z(rest, rest >= 10 ? 0 : 1) + ' g'; }
+              if (ANBRUCH_BASIS === 'ml') { return rest >= 1000 ? z(rest / 1000, 2) + ' l' : z(rest, rest >= 10 ? 0 : 1) + ' ml'; }
+              return z(rest, 1) + ' Stück';
+            }
             function anbruchFill(el){
               var v = parseInt(el.value, 10);
               var c = v < 15 ? '#ef4444' : '#fb923c';
@@ -108,6 +129,8 @@
               var w = document.getElementById('anbruch-wert');
               w.textContent = v;
               w.style.color = c;
+              var m = document.getElementById('anbruch-menge');
+              if (m && ANBRUCH_INHALT > 0) { m.textContent = 'noch ' + anbruchMengeText(ANBRUCH_INHALT * v / 100); }
             }
           </script>
           <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:6px;">
@@ -144,50 +167,43 @@
     {% endif %}
   </div>
 
-  {% if p.ist_eingefroren or p.ist_eingekocht %}
-  <!-- Konservierung: Tiefkühl / Eingekocht -->
-  <div class="card">
-    <div class="card-title" style="margin-bottom:12px;">{% if p.ist_eingekocht %}🥫 Eingekocht{% else %}❄️ Tiefkühl{% endif %}{% if p.markierung %} <span style="display:inline-block; padding:1px 9px; border-radius:6px; background:#e0f2fe; color:#075985; font-family:monospace; font-size:0.9rem;">{{ p.markierung }}</span>{% endif %}{% if p.behaelter %} <span style="font-weight:400; color:var(--muted); font-size:0.82rem;">· {{ p.behaelter }}</span>{% endif %}</div>
-    <form method="post" action="{{ url_for('produkt_tiefkuehl', id=p.id) }}">
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:14px;">
-        <div class="form-group">
-          <label>{% if p.ist_eingekocht %}Eingekocht am{% else %}Eingefroren am{% endif %}</label>
-          <input type="date" name="konserv_datum" value="{{ p.konserv_datum.strftime('%Y-%m-%d') if p.konserv_datum else '' }}">
-        </div>
-        <div class="form-group">
-          <label>Verbrauchen bis</label>
-          <input type="date" name="verbrauchen_bis" value="{{ p.mhd.strftime('%Y-%m-%d') if p.mhd else '' }}">
-        </div>
-        <div class="form-group">
-          <label>Herkunft</label>
-          <input type="text" name="herkunft" value="{{ p.herkunft or '' }}" list="herkunft-liste" autocomplete="off" placeholder="Garten, Reste…">
-          <datalist id="herkunft-liste">
-            <option value="Garten"><option value="Reste"><option value="Selbstgemacht"><option value="Eingekauft">
-          </datalist>
-        </div>
-        <div class="form-group">
-          <label>Aufbewahrt in</label>
-          <input type="text" name="behaelter" value="{{ p.behaelter or '' }}" list="behaelter-liste" autocomplete="off" placeholder="Gefrierbeutel, Weckglas…">
-          <datalist id="behaelter-liste">
-            <option value="Gefrierbeutel"><option value="Gefrierdose"><option value="Vakuumbeutel"><option value="Weckglas"><option value="Schraubglas"><option value="Flasche"><option value="Glas"><option value="Eiswürfelform"><option value="Alufolie">
-          </datalist>
-        </div>
-        <div class="form-group">
-          <label>Kennzeichnung</label>
-          <input type="text" name="markierung" value="{{ p.markierung or '' }}" maxlength="30" placeholder="A3, 12…">
-        </div>
+  <!-- ✏️ Bearbeiten – alle Angaben an EINEM Platz, ein Speichern-Knopf -->
+  <form method="post" action="{{ url_for('produkt_bearbeiten', id=p.id) }}" enctype="multipart/form-data" id="produkt-form">
+    <div class="card" id="bearbeiten" style="scroll-margin-top:80px;">
+      <div class="card-title" style="margin-bottom:14px;">✏️ Bearbeiten</div>
+
+      {% with produkt = p %}{% include "_produkt_felder.html" %}{% endwith %}
+
+      <div class="form-group" style="margin:18px 0; border-top:1px solid var(--border); padding-top:14px;">
+        <label style="font-weight:600;">📷 Produktbild {% if p.bild %}<span style="font-weight:400; color:var(--muted);">(neues Hochladen ersetzt das alte)</span>{% endif %}</label>
+        <input type="file" name="bild" accept="image/*" capture="environment">
+        {% if p.bild %}
+        <label style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; font-size:0.82rem; color:var(--muted); font-weight:400;">
+          <input type="checkbox" name="bild_entfernen" value="1" style="width:auto;"> Bild entfernen
+        </label>
+        {% endif %}
       </div>
-      {% if p.tage_bis_mhd is not none %}
-      <div style="font-size:0.82rem; margin-bottom:12px; color:{{ '#ef4444' if p.tage_bis_mhd < 0 else 'var(--muted)' }};">
-        {% if p.tage_bis_mhd < 0 %}⚠️ Seit {{ -p.tage_bis_mhd }} Tag(en) über „Verbrauchen bis"
-        {% elif p.tage_bis_mhd == 0 %}Heute aufbrauchen
-        {% else %}Noch {{ p.tage_bis_mhd }} Tag(e) haltbar{% endif %}
+
+      <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">🥗 Nährwerte je 100 g/ml</label>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:10px; margin-bottom:18px;">
+        <div class="form-group"><label>Kalorien (kcal)</label><input type="number" step="any" min="0" name="kcal" value="{{ p.kcal if p.kcal is not none else '' }}"></div>
+        <div class="form-group"><label>Eiweiß (g)</label><input type="number" step="any" min="0" name="eiweiss" value="{{ p.eiweiss if p.eiweiss is not none else '' }}"></div>
+        <div class="form-group"><label>Fett (g)</label><input type="number" step="any" min="0" name="fett" value="{{ p.fett if p.fett is not none else '' }}"></div>
+        <div class="form-group"><label>Kohlenhydrate (g)</label><input type="number" step="any" min="0" name="kohlenhydrate" value="{{ p.kohlenhydrate if p.kohlenhydrate is not none else '' }}"></div>
       </div>
-      {% endif %}
-      <button type="submit" class="btn btn-primary btn-sm">💾 Angaben speichern</button>
-    </form>
-  </div>
-  {% endif %}
+
+      <div class="form-group" style="margin-bottom:18px;">
+        <label>📝 Notiz</label>
+        <textarea name="notiz" rows="3" placeholder="z.B. Marke, im Angebot bei…, genauer Stellplatz"
+                  style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-size:0.9rem; resize:vertical;">{{ p.notiz or '' }}</textarea>
+      </div>
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button type="submit" class="btn btn-primary">💾 Speichern</button>
+        <button type="submit" name="danach" value="uebersicht" class="btn btn-ghost">💾 Speichern &amp; zur Übersicht</button>
+      </div>
+    </div>
+  </form>
 
   <!-- Open Food Facts (Namenssuche) -->
   <div class="card">
@@ -218,7 +234,7 @@
         <div style="flex:1; min-width:0;">
           <div style="font-weight:500; font-size:0.88rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ t.name }}</div>
           <div style="font-size:0.74rem; color:var(--muted);">
-            {% if t.marke %}{{ t.marke }} · {% endif %}{% if t.kcal is not none %}{{ t.kcal|int }} kcal{% else %}keine Nährwerte{% endif %}
+            {% if t.marke %}{{ t.marke }} · {% endif %}{% if t.menge %}{{ t.menge }} · {% endif %}{% if t.kcal is not none %}{{ t.kcal|int }} kcal{% else %}keine Nährwerte{% endif %}
           </div>
         </div>
         <form method="post" action="{{ url_for('produkt_off_import', id=p.id) }}" style="margin:0;">
@@ -230,39 +246,6 @@
     </div>
     {% endif %}
   </div>
-
-  <!-- Bearbeiten: Bild / Nährwerte / Notiz -->
-  <form method="post" action="{{ url_for('produkt_detail_speichern', id=p.id) }}" enctype="multipart/form-data">
-    <div class="card">
-      <div class="card-title" style="margin-bottom:14px;">📷 Bild · 🥗 Nährwerte · 📝 Notiz</div>
-
-      <div class="form-group" style="margin-bottom:18px;">
-        <label>Produktbild {% if p.bild %}<span style="font-weight:400; color:var(--muted);">(neues Hochladen ersetzt das alte)</span>{% endif %}</label>
-        <input type="file" name="bild" accept="image/*" capture="environment">
-        {% if p.bild %}
-        <label style="display:inline-flex; align-items:center; gap:6px; margin-top:8px; font-size:0.82rem; color:var(--muted); font-weight:400;">
-          <input type="checkbox" name="bild_entfernen" value="1" style="width:auto;"> Bild entfernen
-        </label>
-        {% endif %}
-      </div>
-
-      <label style="font-size:0.85rem; font-weight:600; color:var(--muted); display:block; margin-bottom:8px;">Nährwerte je 100 g/ml</label>
-      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:10px; margin-bottom:18px;">
-        <div class="form-group"><label>Kalorien (kcal)</label><input type="number" step="0.1" min="0" name="kcal" value="{{ p.kcal if p.kcal is not none else '' }}"></div>
-        <div class="form-group"><label>Eiweiß (g)</label><input type="number" step="0.1" min="0" name="eiweiss" value="{{ p.eiweiss if p.eiweiss is not none else '' }}"></div>
-        <div class="form-group"><label>Fett (g)</label><input type="number" step="0.1" min="0" name="fett" value="{{ p.fett if p.fett is not none else '' }}"></div>
-        <div class="form-group"><label>Kohlenhydrate (g)</label><input type="number" step="0.1" min="0" name="kohlenhydrate" value="{{ p.kohlenhydrate if p.kohlenhydrate is not none else '' }}"></div>
-      </div>
-
-      <div class="form-group" style="margin-bottom:18px;">
-        <label>Notiz</label>
-        <textarea name="notiz" rows="3" placeholder="z.B. Marke, im Angebot bei…, genauer Stellplatz"
-                  style="width:100%; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-size:0.9rem; resize:vertical;">{{ p.notiz or '' }}</textarea>
-      </div>
-
-      <button type="submit" class="btn btn-primary">💾 Speichern</button>
-    </div>
-  </form>
 
   <!-- Verwendet in Rezepten -->
   <div class="card">
@@ -284,4 +267,31 @@
   </div>
 
 </div>
+
+<script>
+// Ungespeicherte Änderungen im Bearbeiten-Formular nicht still verlieren
+// (z.B. durch +/−, Anbruch-Regler, Open-Food-Facts-Suche oder Wegnavigieren)
+(function () {
+  var formular = document.getElementById('produkt-form');
+  if (!formular) { return; }
+  var geaendert = false;
+  formular.addEventListener('input', function () { geaendert = true; });
+  formular.addEventListener('change', function () { geaendert = true; });
+  formular.addEventListener('submit', function () { geaendert = false; });
+  Array.prototype.forEach.call(document.querySelectorAll('form'), function (andere) {
+    if (andere === formular) { return; }
+    andere.addEventListener('submit', function (e) {
+      if (geaendert && !confirm('Deine Änderungen im Bearbeiten-Formular sind noch nicht gespeichert und gehen verloren. Trotzdem fortfahren?')) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+      geaendert = false;
+    }, true);
+  });
+  window.addEventListener('beforeunload', function (e) {
+    if (geaendert) { e.preventDefault(); e.returnValue = ''; }
+  });
+})();
+</script>
 {% endblock %}

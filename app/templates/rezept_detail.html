@@ -16,7 +16,12 @@
 
 {% block content %}
 
-<div style="display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start;">
+<style>
+  /* Zwei Spalten am PC; auf Handy/Tablet untereinander (sonst wird die Zutatenliste abgeschnitten) */
+  .rezept-grid{ display:grid; grid-template-columns:minmax(0, 1fr) 340px; gap:20px; align-items:start; }
+  @media (max-width: 1000px){ .rezept-grid{ grid-template-columns:minmax(0, 1fr); } }
+</style>
+<div class="rezept-grid">
 
   <!-- Links: Info + Anleitung -->
   <div>
@@ -62,10 +67,13 @@
         <span style="font-size:0.8rem; color:var(--muted);">{{ rezept.zutaten|length }} Zutaten</span>
       </div>
 
-      {% set fehlend = abgleich | selectattr("vorhanden", "equalto", false) | list %}
-      {% if fehlend %}
+      {% set fehlend = abgleich | selectattr("status", "in", ["fehlt", "wenig"]) | list %}
+      {% set unsicher = abgleich | selectattr("status", "equalto", "unsicher") | list %}
+      {% if fehlend or unsicher %}
         <div class="alert alert-warning" style="margin-bottom: 12px;">
-          {{ fehlend|length }} Zutaten fehlen oder nicht genug im Vorrat
+          {% if fehlend %}{{ fehlend|length }} Zutaten fehlen oder nicht genug im Vorrat{% endif %}
+          {%- if fehlend and unsicher %} · {% endif -%}
+          {% if unsicher %}{{ unsicher|length }} unsicher (❓ bitte prüfen){% endif %}
         </div>
       {% else %}
         <div class="alert alert-success" style="margin-bottom: 12px;">
@@ -73,30 +81,40 @@
         </div>
       {% endif %}
 
+      {% set farben = {'ok': 'var(--success)', 'da': 'var(--success)', 'wenig': 'var(--warning)', 'fehlt': 'var(--danger)', 'unsicher': 'var(--warning)', 'ignoriert': 'var(--muted)'} %}
+      {% set symbole = {'ok': '✅', 'da': '✅', 'wenig': '⚠️', 'fehlt': '🛒', 'unsicher': '❓', 'ignoriert': '➖'} %}
       <div style="display: flex; flex-direction: column; gap: 7px;">
         {% for a in abgleich %}
-        {% set statusfarbe = 'var(--success)' if a.vorhanden else ('var(--warning)' if a.vorrat else 'var(--danger)') %}
-        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 9px;
-             background: var(--bg); border-left: 4px solid {{ statusfarbe }};">
-          <span style="font-size: 0.95rem; line-height: 1;">{{ '✅' if a.vorhanden else ('⚠️' if a.vorrat else '🛒') }}</span>
+        {% set statusfarbe = farben[a.status] %}
+        <div style="display: flex; align-items: center; gap: 10px; padding: 9px 8px 9px 12px; border-radius: 9px;
+             background: var(--bg); border-left: 4px solid {{ 'var(--border)' if a.status == 'ignoriert' else statusfarbe }};">
+          <span style="font-size: 0.95rem; line-height: 1;">{{ symbole[a.status] }}</span>
           <div style="flex: 1; min-width: 0;">
             <div style="font-weight: 600; color: var(--text); font-size: 0.9rem;">{{ a.zutat.name }}</div>
             <div style="font-size: 0.78rem; color: var(--muted);">
               <span>benötigt: {{ a.zutat.menge|int if a.zutat.menge == a.zutat.menge|int else a.zutat.menge }} {{ a.zutat.einheit }}</span>
-              {% if a.vorhanden %}
-                · <span style="color: var(--success); font-weight: 600;">im Vorrat ✓</span>
-              {% elif a.vorrat %}
-                · <span style="color: var(--warning); font-weight: 600;">nur {{ a.vorrat.menge|int if a.vorrat.menge == a.vorrat.menge|int else a.vorrat.menge }} {{ a.vorrat.einheit }} da</span>
-              {% else %}
-                · <span style="color: var(--danger); font-weight: 600;">fehlt</span>
-              {% endif %}
+              · <span style="color: {{ statusfarbe }}; font-weight: 600;">
+                {%- if a.produkt_id -%}
+                  <a href="{{ url_for('produkt_detail', id=a.produkt_id) }}" style="color: inherit; text-decoration: none;" title="Produkt öffnen">{{ a.text }}</a>
+                {%- else -%}{{ a.text }}{%- endif -%}
+              </span>
             </div>
+            {% if a.hinweis %}<div style="font-size: 0.72rem; color: var(--muted); margin-top: 2px;">{{ a.hinweis }}</div>{% endif %}
           </div>
+          <button type="button" class="btn btn-ghost btn-sm zuo-btn{{ ' zuo-aktiv' if a.zugeordnet }}"
+                  title="{{ 'Zuordnung ändern' if a.zugeordnet else 'Vorratsprodukt zuordnen' }}"
+                  aria-label="Vorratsprodukt für {{ a.zutat.name }} zuordnen"
+                  onclick='zuordnungOeffnen({{ a.zutat.name|tojson }}, {{ a.auswahl|tojson }})'>🔗</button>
         </div>
         {% endfor %}
       </div>
+      {% if abgleich %}
+      <p style="font-size: 0.72rem; color: var(--muted); margin: 10px 2px 0;">
+        🔗 = Zutat einem Vorratsprodukt zuordnen (z. B. Hackfleisch → Gehacktes). Gilt für alle Rezepte.
+      </p>
+      {% endif %}
 
-      {% if fehlend %}
+      {% if fehlend or unsicher %}
       <form method="post" action="{{ url_for('rezept_einkaufen', id=rezept.id) }}" style="margin-top: 16px;">
         <select name="liste_id" style="width:100%; margin-bottom:8px; padding:8px 10px;
                 border:1px solid var(--border); border-radius:8px; font-size:0.88rem;">
@@ -145,11 +163,65 @@
   </div>
 </div>
 
+<!-- Modal: Zutat einem Vorratsprodukt zuordnen -->
+<style>
+  .zuo-btn{ flex:none; min-width:34px; padding:4px 6px; opacity:0.55; }
+  .zuo-btn:hover, .zuo-btn.zuo-aktiv{ opacity:1; }
+  .zuo-btn.zuo-aktiv{ border-color:var(--primary); }
+</style>
+<div id="zuordnung-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+     z-index:1000; align-items:center; justify-content:center; padding:16px;">
+  <div class="card" style="max-width:420px; width:100%; margin:0;">
+    <div class="card-title" style="margin-bottom:6px;">🔗 Zutat zuordnen</div>
+    <p id="zuo-info" style="font-size:0.85rem; color:var(--muted); margin-bottom:14px;"></p>
+    <form method="post" action="{{ url_for('zutat_zuordnen') }}">
+      <input type="hidden" name="rezept_id" value="{{ rezept.id }}">
+      <input type="hidden" name="zutat" id="zuo-zutat">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Gehört zu</label>
+        <select name="produkt" id="zuo-produkt">
+          <option value="__auto__">🔄 Automatisch erkennen</option>
+          <option value="__ignorieren__">➖ Nicht aus dem Vorrat prüfen (z. B. Wasser)</option>
+          {% if produkt_namen %}
+          <optgroup label="Produkte im Vorrat">
+            {% for n in produkt_namen %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
+          </optgroup>
+          {% endif %}
+        </select>
+      </div>
+      <p style="font-size:0.75rem; color:var(--muted); margin-bottom:16px;">
+        Wird gemerkt und gilt für alle Rezepte mit dieser Zutat – auch für „Fehlende Zutaten hinzufügen“.
+      </p>
+      <div style="display:flex; gap:10px;">
+        <button type="submit" class="btn btn-primary" style="flex:1;">💾 Speichern</button>
+        <button type="button" class="btn btn-ghost" onclick="zuordnungSchliessen()">Abbrechen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
 function essensplanOeffnen() { document.getElementById('essensplan-modal').style.display = 'flex'; }
 function essensplanSchliessen() { document.getElementById('essensplan-modal').style.display = 'none'; }
 document.getElementById('essensplan-modal').addEventListener('click', function(e) {
   if (e.target === this) essensplanSchliessen();
+});
+
+function zuordnungOeffnen(zutat, auswahl) {
+  document.getElementById('zuo-zutat').value = zutat;
+  document.getElementById('zuo-info').textContent = '„' + zutat + '“ gehört zu welchem Produkt im Vorrat?';
+  var sel = document.getElementById('zuo-produkt');
+  sel.value = auswahl;
+  if (sel.value !== auswahl) { sel.value = '__auto__'; }
+  document.getElementById('zuordnung-modal').style.display = 'flex';
+  setTimeout(function() { sel.focus(); }, 50);
+}
+function zuordnungSchliessen() { document.getElementById('zuordnung-modal').style.display = 'none'; }
+document.getElementById('zuordnung-modal').addEventListener('click', function(e) {
+  if (e.target === this) zuordnungSchliessen();
+});
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { zuordnungSchliessen(); }
 });
 </script>
 

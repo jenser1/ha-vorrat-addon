@@ -6,8 +6,8 @@ Nur die aktuellste Version wird mit Sicherheitsupdates versorgt:
 
 | Version | Unterstützt |
 |---------|-------------|
-| 1.7.x   | ✅ Ja       |
-| < 1.7   | ❌ Nein     |
+| 1.8.x   | ✅ Ja       |
+| < 1.8   | ❌ Nein     |
 
 ## Sicherheitslücke melden
 

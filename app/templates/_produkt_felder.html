@@ -1,0 +1,224 @@
+{#- Produkt-Grundfelder – gemeinsam für "Neues Produkt" und das Bearbeiten auf der Produktseite.
+    Erwartet: produkt (oder None), einheiten, inhalt_einheiten, lagerorte, kategorien, frost_orte,
+    richtwerte, einkoch_richtwerte, herkunft_optionen, heute, vb_default, konserv_vorwahl -#}
+{% set konserv_sel = (produkt.konserv_methode if produkt else '') or (konserv_vorwahl|default('')) %}
+<div class="form-grid">
+  <div class="form-group" style="grid-column: 1 / -1;">
+    <label>Produktname *</label>
+    <input type="text" name="name" value="{{ produkt.name if produkt else '' }}" required placeholder="z. B. Tomaten, Mehl, Milch...">
+  </div>
+
+  <div class="form-group">
+    <label>Menge</label>
+    <input type="number" name="menge" step="any" min="0"
+      value="{% if produkt %}{{ produkt.menge|int if produkt.menge == produkt.menge|int else produkt.menge }}{% else %}1{% endif %}">
+  </div>
+
+  <div class="form-group">
+    <label>Einheit</label>
+    <select name="einheit" id="einheit-wahl" onchange="inhaltUmschalten()">
+      {% set einheiten = einheiten or ['Stück', 'g', 'kg', 'ml', 'l', 'Packung', 'Dose', 'Flasche', 'Tüte'] %}
+      {% if produkt and produkt.einheit and produkt.einheit not in einheiten %}
+        <option value="{{ produkt.einheit }}" selected>{{ produkt.einheit }}</option>
+      {% endif %}
+      {% for e in einheiten %}
+        <option value="{{ e }}" {{ 'selected' if produkt and produkt.einheit == e }}>{{ e }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- Inhalt pro Einheit: z.B. 1 Packung à 500 g → Rezept-Abgleich rechnet in Gramm -->
+  <div class="form-group" id="inhalt-group">
+    <label>Inhalt pro <span id="inhalt-label">{{ produkt.einheit if produkt and produkt.einheit else 'Stück' }}</span>
+      <span style="font-size:0.75rem; color:var(--muted); font-weight:400;">(optional)</span>
+    </label>
+    <div style="display:flex; gap:8px;">
+      <input type="number" name="inhalt" step="any" min="0" style="flex:1; min-width:0;"
+        value="{% if produkt and produkt.inhalt %}{{ produkt.inhalt|int if produkt.inhalt == produkt.inhalt|int else produkt.inhalt }}{% endif %}"
+        placeholder="z. B. 500">
+      <select name="inhalt_einheit" style="width:auto; flex:none;">
+        {% for ie in inhalt_einheiten %}
+          <option value="{{ ie }}" {{ 'selected' if produkt and produkt.inhalt_einheit == ie }}>{{ ie }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <span style="font-size:0.72rem; color:var(--muted);">Damit rechnet der Rezept-Abgleich in Gramm/Liter.</span>
+  </div>
+
+  <div class="form-group">
+    <label>Mindestmenge</label>
+    <input type="number" name="mindestmenge" step="any" min="0"
+      value="{% if produkt %}{{ produkt.mindestmenge|int if produkt.mindestmenge == produkt.mindestmenge|int else produkt.mindestmenge }}{% else %}1{% endif %}">
+  </div>
+
+  <div class="form-group">
+    <label>Lagerort</label>
+    <input type="text" name="lagerort" value="{{ produkt.lagerort if produkt else '' }}"
+      list="lagerort-liste" autocomplete="off" placeholder="z. B. Kühlschrank, Keller...">
+    <datalist id="lagerort-liste">
+      {% for ort in lagerorte or [] %}<option value="{{ ort }}">{{ '❄️ Gefrierfach' if ort in (frost_orte or []) else '' }}</option>{% endfor %}
+    </datalist>
+    <span style="font-size:0.72rem; color:var(--muted);">Tipp: vorhandenen Lagerort wählen vermeidet Tippfehler-Dubletten.</span>
+  </div>
+
+  <div class="form-group">
+    <label>Kategorie</label>
+    <select name="kategorie">
+      {% set kategorien = kategorien or ['Obst & Gemüse', 'Milchprodukte', 'Fleisch & Fisch', 'Backwaren', 'Tiefkühl', 'Getränke', 'Konserven', 'Gewürze', 'Süßes', 'Haushalt', 'Sonstiges'] %}
+      {% if produkt and produkt.kategorie and produkt.kategorie not in kategorien %}
+        <option value="{{ produkt.kategorie }}" selected>{{ produkt.kategorie }}</option>
+      {% endif %}
+      {% for k in kategorien %}
+        <option value="{{ k }}" {{ 'selected' if produkt and produkt.kategorie == k }}>{{ k }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="form-group" id="mhd-group" {% if konserv_sel %}style="display:none;"{% endif %}>
+    <label>Mindesthaltbarkeitsdatum</label>
+    <input type="date" name="mhd"
+      value="{{ produkt.mhd.strftime('%Y-%m-%d') if produkt and produkt.mhd else '' }}">
+  </div>
+
+  <div class="form-group">
+    <label>Gebindegröße
+      <span style="font-size:0.75rem; color:var(--muted); font-weight:400;">
+        (optional – z.B. 12 für 12er-Kiste, 0 = kein Gebinde)
+      </span>
+    </label>
+    <input type="number" name="gebinde" min="0" step="1"
+      value="{{ produkt.gebinde_wert if produkt and produkt.gebinde_wert else 0 }}"
+      placeholder="0">
+    {% if produkt and produkt.gebinde_wert and produkt.gebinde_wert > 1 %}
+    <div style="font-size:0.8rem; color:var(--primary); margin-top:4px;">
+      ℹ️ Übersicht zeigt zusätzlich „− Kiste / + Kiste“ (1 Kiste = {{ produkt.gebinde_wert }} {{ produkt.einheit }})
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Konservierung: Einfrieren / Einkochen -->
+  <div class="form-group" style="grid-column: 1 / -1; border-top:1px solid var(--border); padding-top:14px; margin-top:4px;">
+    <label style="font-weight:600;">Konservierung</label>
+    <select name="konservierung" id="konserv-methode" onchange="konservUmschalten()">
+      <option value="" {{ 'selected' if not konserv_sel }}>Keine</option>
+      <option value="eingefroren" {{ 'selected' if konserv_sel == 'eingefroren' }}>❄️ Eingefroren (Tiefkühl)</option>
+      <option value="eingekocht" {{ 'selected' if konserv_sel == 'eingekocht' }}>🥫 Eingekocht</option>
+    </select>
+    <span style="font-size:0.72rem; color:var(--muted);">Ersetzt das MHD durch „Verbrauchen bis" (automatisch aus dem Datum).</span>
+  </div>
+  <div id="konserv-felder" style="grid-column:1/-1; {% if not konserv_sel %}display:none;{% endif %}">
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Herkunft</label>
+        <select name="herkunft">
+          <option value="">–</option>
+          {% for h in herkunft_optionen or [] %}
+            <option value="{{ h }}" {{ 'selected' if produkt and produkt.herkunft == h }}>{{ h }}</option>
+          {% endfor %}
+          {% if produkt and produkt.herkunft and produkt.herkunft not in (herkunft_optionen or []) %}
+            <option value="{{ produkt.herkunft }}" selected>{{ produkt.herkunft }}</option>
+          {% endif %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Aufbewahrt in <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(Behälter)</span></label>
+        <input type="text" name="behaelter" list="behaelter-liste" autocomplete="off"
+               value="{{ produkt.behaelter if produkt and produkt.behaelter else '' }}"
+               placeholder="z. B. Gefrierbeutel, Weckglas…">
+        <datalist id="behaelter-liste">
+          <option value="Gefrierbeutel"><option value="Gefrierdose"><option value="Vakuumbeutel"><option value="Weckglas"><option value="Schraubglas"><option value="Flasche"><option value="Glas"><option value="Eiswürfelform"><option value="Alufolie">
+        </datalist>
+      </div>
+      <div class="form-group">
+        <label>Kennzeichnung <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(zum Wiedererkennen)</span></label>
+        <input type="text" name="markierung" maxlength="30"
+               value="{{ produkt.markierung if produkt and produkt.markierung else '' }}"
+               placeholder="z. B. A3, 12, B…">
+      </div>
+      <div class="form-group">
+        <label>Art <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(Haltbarkeit)</span></label>
+        <select id="konserv-art" onchange="konservBerechnen()"></select>
+      </div>
+      <div class="form-group">
+        <label id="konserv-datum-label">Datum</label>
+        <input type="date" name="konserv_datum" id="konserv-datum" onchange="konservBerechnen()"
+               value="{{ produkt.konserv_datum.strftime('%Y-%m-%d') if produkt and produkt.konserv_datum else heute }}">
+      </div>
+      <div class="form-group">
+        <label>Verbrauchen bis <span style="font-size:0.72rem; color:var(--muted); font-weight:400;">(auto)</span></label>
+        <input type="date" name="verbrauchen_bis" id="konserv-vb"
+               value="{{ produkt.mhd.strftime('%Y-%m-%d') if konserv_sel and produkt and produkt.mhd else ('' if produkt and konserv_sel else vb_default) }}">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var RICHT = { eingefroren: {{ richtwerte | tojson }}, eingekocht: {{ einkoch_richtwerte | tojson }} };
+var DATUM_LABEL = { eingefroren: 'Eingefroren am', eingekocht: 'Eingekocht am' };
+function monatePlus(datumStr, n) {
+  var t = datumStr.split('-');
+  if (t.length !== 3) return datumStr;
+  var jahr = parseInt(t[0], 10);
+  var monat = parseInt(t[1], 10) - 1 + parseInt(n, 10);
+  var tag = parseInt(t[2], 10);
+  jahr = jahr + Math.floor(monat / 12);
+  monat = ((monat % 12) + 12) % 12;
+  var letzterTag = new Date(jahr, monat + 1, 0).getDate();
+  if (tag > letzterTag) tag = letzterTag;
+  return jahr + '-' + ('0' + (monat + 1)).slice(-2) + '-' + ('0' + tag).slice(-2);
+}
+function konservArtFuellen() {
+  var m = document.getElementById('konserv-methode').value;
+  var sel = document.getElementById('konserv-art');
+  if (!sel) return;
+  var tab = RICHT[m] || {};
+  sel.innerHTML = '';
+  for (var k in tab) {
+    var o = document.createElement('option');
+    o.value = k; o.setAttribute('data-monate', tab[k]);
+    o.textContent = k + ' (' + tab[k] + ' Mon.)';
+    if (k === 'Sonstiges') o.selected = true;
+    sel.appendChild(o);
+  }
+}
+function konservBerechnen() {
+  var ef = document.getElementById('konserv-datum');
+  var art = document.getElementById('konserv-art');
+  var vb = document.getElementById('konserv-vb');
+  if (!ef || !art || !vb || !ef.value || art.selectedIndex < 0) return;
+  var monate = art.options[art.selectedIndex].getAttribute('data-monate') || 12;
+  vb.value = monatePlus(ef.value, monate);
+}
+function konservUmschalten() {
+  var m = document.getElementById('konserv-methode').value;
+  var an = (m === 'eingefroren' || m === 'eingekocht');
+  document.getElementById('konserv-felder').style.display = an ? '' : 'none';
+  var mhd = document.getElementById('mhd-group');
+  if (mhd) mhd.style.display = an ? 'none' : '';
+  var lab = document.getElementById('konserv-datum-label');
+  if (lab) lab.textContent = DATUM_LABEL[m] || 'Datum';
+  if (an) { konservArtFuellen(); konservBerechnen(); }
+}
+function konservInit() {
+  var m = document.getElementById('konserv-methode');
+  if (!m) return;
+  var lab = document.getElementById('konserv-datum-label');
+  if (lab) lab.textContent = DATUM_LABEL[m.value] || 'Datum';
+  if (m.value === 'eingefroren' || m.value === 'eingekocht') konservArtFuellen();
+}
+document.addEventListener('DOMContentLoaded', konservInit);
+
+// "Inhalt pro …" nur bei Packung/Dose/Stück usw. – bei g, kg, ml, l ist die Menge schon genau
+var MASS_EINHEITEN = ['mg', 'g', 'gr', 'gramm', 'kg', 'kilo', 'ml', 'cl', 'dl', 'l', 'ltr', 'liter'];
+function inhaltUmschalten() {
+  var sel = document.getElementById('einheit-wahl');
+  var grp = document.getElementById('inhalt-group');
+  if (!sel || !grp) return;
+  var e = sel.value || '';
+  grp.style.display = MASS_EINHEITEN.indexOf(e.trim().replace(/\.$/, '').toLowerCase()) >= 0 ? 'none' : '';
+  var lab = document.getElementById('inhalt-label');
+  if (lab) lab.textContent = e || 'Stück';
+}
+document.addEventListener('DOMContentLoaded', inhaltUmschalten);
+</script>

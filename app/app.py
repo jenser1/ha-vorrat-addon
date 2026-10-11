@@ -2,7 +2,8 @@ from flask import Flask, render_template, request, redirect, url_for, flash, g, 
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
 import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal, secrets, hmac
-import ipaddress, socket
+import ipaddress, socket, unicodedata, math
+from functools import lru_cache
 from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 from translations import TRANSLATIONS, CURRENCIES, LANGUAGES, get_translation, format_currency
@@ -107,6 +108,8 @@ class Produkt(db.Model):
     eiweiss = db.Column(db.Float, nullable=True)
     fett = db.Column(db.Float, nullable=True)
     kohlenhydrate = db.Column(db.Float, nullable=True)
+    inhalt = db.Column(db.Float, nullable=True)            # Inhalt je Einheit, z.B. 500 (g) je Packung
+    inhalt_einheit = db.Column(db.String(10), default="")  # g | kg | ml | l | Stück
 
 class EinkaufsListe(db.Model):
     """Eine benannte Einkaufsliste (z.B. 'Edeka', 'Aldi')."""
@@ -156,6 +159,13 @@ class RezeptZutat(db.Model):
     name = db.Column(db.String(100), nullable=False)
     menge = db.Column(db.Float, default=1)
     einheit = db.Column(db.String(20), default="Stueck")
+
+class ZutatZuordnung(db.Model):
+    """Gemerkte Zuordnung Rezept-Zutat → Vorratsprodukt (gilt für alle Rezepte).
+    produkt_name "" = Zutat nicht aus dem Vorrat prüfen (z.B. Wasser)."""
+    id = db.Column(db.Integer, primary_key=True)
+    begriff = db.Column(db.String(100), unique=True, nullable=False)  # normalisiert, z.B. "hackfleisch"
+    produkt_name = db.Column(db.String(100), default="")
 
 class Einstellungen(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -473,6 +483,461 @@ EINKOCH_RICHTWERT = {
 }
 HERKUNFT_OPTIONEN = ["Garten", "Reste", "Selbstgemacht", "Eingekauft"]
 
+# ── Mengen, Packungsinhalt & Vorrat-Abgleich ───────────────────────────────────
+
+# Auswahl für "Inhalt pro Einheit" (z.B. 1 Packung à 500 g)
+INHALT_EINHEITEN = ["g", "kg", "ml", "l", "Stück"]
+
+# Vergleichs-Basis: Masse → g, Volumen → ml, Anzahl → Stück (Faktor = Basis je Einheit)
+_EINHEIT_BASIS = {
+    "mg": ("g", 0.001), "g": ("g", 1.0), "gr": ("g", 1.0), "gramm": ("g", 1.0),
+    "kg": ("g", 1000.0), "kilo": ("g", 1000.0), "kilogramm": ("g", 1000.0), "pfund": ("g", 500.0),
+    "ml": ("ml", 1.0), "milliliter": ("ml", 1.0), "cl": ("ml", 10.0), "dl": ("ml", 100.0),
+    "l": ("ml", 1000.0), "ltr": ("ml", 1000.0), "liter": ("ml", 1000.0),
+    "stück": ("stück", 1.0), "stueck": ("stück", 1.0), "stk": ("stück", 1.0), "st": ("stück", 1.0),
+}
+# Gleichbedeutende Schreibweisen von Behältern (Mehrzahl, Abkürzungen)
+_EINHEIT_ALIAS = {
+    "pkg": "packung", "pck": "packung", "pckg": "packung", "pack": "packung", "päckchen": "packung",
+    "packungen": "packung", "paket": "packung", "dosen": "dose", "flaschen": "flasche",
+    "gläser": "glas", "tüten": "tüte", "scheiben": "scheibe", "zehen": "zehe",
+}
+# Kleine Mengen (Löffel, Gewürze): kein Mengenvergleich – vorhanden, sobald etwas da ist
+_EINHEIT_KLEIN = {"el", "tl", "prise", "prisen", "msp", "messerspitze", "spritzer", "schuss",
+                  "etwas", "nach geschmack", "handvoll", "tropfen", "tbsp", "tsp"}
+
+def einheit_schluessel(e):
+    """Einheit vereinheitlicht für Vergleiche: 'Pkg.' → 'packung', 'Stück' → 'stück'."""
+    e = unicodedata.normalize("NFC", str(e or "")).strip().rstrip(".").strip().lower()
+    return _EINHEIT_ALIAS.get(e, e)
+
+def einheit_basis(e):
+    """(Basis, Faktor) für Masse/Volumen/Anzahl – z.B. 'kg' → ('g', 1000.0); sonst None."""
+    return _EINHEIT_BASIS.get(einheit_schluessel(e))
+
+def ist_masseinheit(e):
+    """g, kg, ml, l … – dafür ergibt ein 'Inhalt pro Einheit' keinen Sinn."""
+    b = einheit_basis(e)
+    return bool(b) and b[0] in ("g", "ml")
+
+def zahl_de(x, stellen=1):
+    """Zahl mit deutschem Komma, ohne überflüssige Nullen: 1.5 → '1,5', 2.0 → '2'."""
+    try:
+        r = round(float(x), stellen)
+    except (TypeError, ValueError):
+        return ""
+    if r == int(r):
+        return str(int(r))
+    return f"{r:.{stellen}f}".rstrip("0").rstrip(".").replace(".", ",")
+
+def basis_text(wert, basis, label=None):
+    """Menge lesbar: (1500, 'g') → '1,5 kg', (250, 'ml') → '250 ml', (3, 'packung', 'Packung') → '3 Packung'."""
+    wert = max(0.0, float(wert or 0))
+    if basis == "g":
+        return f"{zahl_de(wert / 1000, 2)} kg" if wert >= 1000 else f"{zahl_de(wert, 0 if wert >= 10 else 1)} g"
+    if basis == "ml":
+        return f"{zahl_de(wert / 1000, 2)} l" if wert >= 1000 else f"{zahl_de(wert, 0 if wert >= 10 else 1)} ml"
+    if basis == "stück":
+        return f"{zahl_de(wert)} Stück"
+    return f"{zahl_de(wert)} {label or basis}"
+
+def inhalt_aus_formular(form, einheit):
+    """(inhalt, inhalt_einheit) aus dem Produktformular. Bei g/kg/ml/l nicht nötig → (None, '')."""
+    if ist_masseinheit(einheit):
+        return None, ""
+    roh = (form.get("inhalt") or "").strip().replace(",", ".")
+    try:
+        wert = float(roh)
+    except ValueError:
+        return None, ""
+    if not (0 < wert < 1_000_000):  # schließt auch nan/inf aus
+        return None, ""
+    ie = (form.get("inhalt_einheit") or "g").strip()
+    if ie not in INHALT_EINHEITEN:
+        ie = "g"
+    if ie == "Stück" and einheit_schluessel(einheit) == "stück":
+        return None, ""  # "1 Stück à 1 Stück" ergibt keinen Sinn
+    return round(wert, 3), ie
+
+def produkt_bestaende(p, anbruch_prozent=None):
+    """Bestand eines Produkt-Eintrags je Vergleichs-Einheit, z.B. 3 Packung à 500 g →
+    {'packung': 3.0, 'g': 1500.0}. Ist eine Packung angebrochen (anbruch_prozent = Füllstand),
+    zählt sie nur mit ihrem Rest. Auch Nullbestände liefern ihre Einheiten (mit 0)."""
+    menge = max(0.0, float(p.menge or 0))
+    if anbruch_prozent is not None and menge >= 1:
+        menge = menge - 1 + max(0.0, min(100.0, float(anbruch_prozent))) / 100.0
+    erg = {}
+    eb = einheit_basis(p.einheit)
+    if eb:
+        erg[eb[0]] = menge * eb[1]
+    else:
+        erg[einheit_schluessel(p.einheit) or "stück"] = menge
+    if p.inhalt and p.inhalt > 0:
+        ib = einheit_basis(p.inhalt_einheit)
+        if ib and ib[0] not in erg:
+            erg[ib[0]] = menge * p.inhalt * ib[1]
+    return erg
+
+def produkt_inhalt_infos(p, anbruch_prozent=None):
+    """Anzeige-Texte zum Packungsinhalt: ('à 500 g', '1,5 kg' gesamt, 'noch 300 g' in der offenen
+    Packung). Leere Texte, wenn kein Inhalt gepflegt ist."""
+    if not p.inhalt or p.inhalt <= 0 or ist_masseinheit(p.einheit):
+        return "", "", ""
+    ib = einheit_basis(p.inhalt_einheit)
+    if not ib:
+        return "", "", ""
+    inhalt = f"à {zahl_de(p.inhalt, 2)} {p.inhalt_einheit}"
+    gesamt = basis_text(produkt_bestaende(p, anbruch_prozent).get(ib[0], 0), ib[0])
+    offen = ""
+    if anbruch_prozent is not None and (p.menge or 0) >= 1:
+        rest = p.inhalt * ib[1] * max(0.0, min(100.0, float(anbruch_prozent))) / 100.0
+        offen = "noch " + basis_text(rest, ib[0])
+    return inhalt, gesamt, offen
+
+def anbruch_prozente():
+    """{produkt_id: Füllstand in %} aller angebrochenen Produkte (Raw-SQL-Spalten)."""
+    try:
+        with db.engine.connect() as conn:
+            rows = conn.execute(db.text(
+                "SELECT id, angebrochen_prozent FROM produkt WHERE angebrochen=1")).fetchall()
+        return {r[0]: (100.0 if r[1] is None else float(r[1])) for r in rows}
+    except Exception:
+        return {}
+
+def _norm_text(t):
+    """Klein, NFC, ß → ss – Grundlage für alle Namensvergleiche."""
+    return unicodedata.normalize("NFC", str(t or "")).lower().replace("ß", "ss")
+
+# Wörter ohne Aussagekraft für den Namensvergleich (Zustand, Größe, Farbe, Füllwörter)
+_ZUTAT_FUELLWOERTER = {_norm_text(w) for w in """
+    und oder mit ohne von vom zum zur für aus nach belieben etwas ca evtl eventuell optional bio tk
+    der die das den dem ein eine einer
+    frisch frische frischer frisches gehackt gehackte gehackter gerieben geriebene geriebener
+    gemahlen gemahlene gemahlener getrocknet getrocknete getrockneter geschält geschälte
+    gewürfelt gewürfelte tiefgekühlt tiefgekühlte passiert passierte geschmolzen geschmolzene
+    groß große großer kleine kleiner klein mittelgroß mittelgroße
+    rot rote roter grün grüne grüner gelb gelbe gelber weiß weiße weißer schwarz schwarze schwarzer
+    fein feine feiner grob grobe grober reif reife weich weiche
+    kalt kalte kaltes warm warme warmes heiß heiße heißes lauwarm lauwarme lauwarmes zimmerwarm zimmerwarme
+    stück stücke scheibe scheiben prise el tl msp dose dosen packung päckchen becher glas bund zehe zehen
+    braten kochen garnieren bestreuen servieren""".split()}
+
+# Regionale Varianten und unregelmäßige Formen – je Gruppe gleichbedeutend
+_ZUTAT_SYNONYME = [
+    ("hackfleisch", "gehacktes", "hack"), ("möhre", "karotte", "mohrrübe"), ("ei", "eier"),
+    ("apfel", "äpfel"), ("brötchen", "semmel", "schrippe"), ("lauch", "porree"),
+    ("quark", "topfen"), ("kartoffel", "erdapfel"), ("tomate", "paradeiser"),
+    ("blumenkohl", "karfiol"), ("aprikose", "marille"), ("pflaume", "zwetschge", "zwetschke"),
+    ("weißkohl", "weißkraut"), ("rotkohl", "rotkraut", "blaukraut"), ("puderzucker", "staubzucker"),
+    ("paprika", "paprikaschote"), ("knoblauch", "knoblauchzehe"),
+    ("frühlingszwiebel", "lauchzwiebel"), ("speisestärke", "maisstärke"),
+]
+# Kurze Grundwörter, die trotzdem als Wortende zählen (Olivenöl → Öl)
+_KURZE_GRUNDWOERTER = {"öl"}
+# Neutrale Vorsilben: "Weizen|mehl" ist Mehl, "Schlag|sahne" ist Sahne → sicherer Treffer.
+# Andere Zusammensetzungen (Kokos|milch, Erdnuss|butter) gelten nur als "unsicher".
+_NEUTRALE_VORSILBEN = {_norm_text(w) for w in """
+    rinder rind schweine schwein kalbs kalb lamm puten hähnchen hühner huhn geflügel wild
+    weizen dinkel roggen vollkorn voll fett mager halbfett fettarm schlag koch sprüh
+    oliven raps sonnenblumen speise pflanzen meer jod haushalts kristall rohr fein
+    gemüse fleisch tiefkühl dosen kirsch cherry strauch rispen salat brat back""".split()}
+
+def _stamm_roh(w):
+    """Sehr einfache Mehrzahl-/Endungs-Kürzung: Zwiebeln → zwiebel, Tomaten/Tomate → tomat."""
+    for suf in ("en", "er", "n", "e", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            return w[:-len(suf)]
+    return w
+
+_SYN_KANON, _SYN_VARIANTEN = {}, {}
+for _gruppe in _ZUTAT_SYNONYME:
+    _st = [_stamm_roh(_norm_text(w)) for w in _gruppe]
+    for _s in _st:
+        _SYN_KANON[_s] = _st[0]
+    _SYN_VARIANTEN[_st[0]] = set(_st)
+
+def _stamm(w):
+    s = _stamm_roh(w)
+    return _SYN_KANON.get(s, s)
+
+def _zutat_woerter(text):
+    """Aussagekräftige Wörter eines Zutaten-/Produktnamens – ohne Klammern und Zusätze nach Komma:
+    'Mehl (Type 405)' → ['mehl'], 'Paprika, rot' → ['paprika']."""
+    t = re.sub(r"\([^)]*\)", " ", _norm_text(text)).split(",")[0]
+    return [w for w in re.findall(r"[a-zäöü]+", t) if w not in _ZUTAT_FUELLWOERTER and len(w) >= 2]
+
+@lru_cache(maxsize=4096)
+def _staemme(text):
+    return tuple(_stamm(w) for w in _zutat_woerter(text))
+
+# Immer vorhanden (Leitungswasser) – wird nicht als fehlend gemeldet
+_IMMER_DA = {_stamm(w) for w in ("wasser", "leitungswasser", "eiswasser")}
+
+def zutat_begriff(name):
+    """Schlüssel für gemerkte Zuordnungen: 'Hackfleisch, gemischt' → 'hackfleisch'."""
+    w = _zutat_woerter(name)
+    return (" ".join(w) if w else _norm_text(name).strip())[:100]
+
+def _wort_score(a, b):
+    """3 = gleich/Synonym, 2 = gleiches Grundwort mit neutraler Vorsilbe (Schlag|sahne ↔ Sahne),
+    1 = anderes zusammengesetztes Wort (Kokos|milch ↔ Milch) – nur ein unsicherer Vorschlag."""
+    if a == b:
+        return 3
+    best = 0
+    for x in _SYN_VARIANTEN.get(a, (a,)):
+        for y in _SYN_VARIANTEN.get(b, (b,)):
+            if x == y:
+                return 3
+            kurz, lang = (x, y) if len(x) <= len(y) else (y, x)
+            if (len(kurz) >= 4 or kurz in _KURZE_GRUNDWOERTER) and lang.endswith(kurz):
+                best = max(best, 2 if lang[:-len(kurz)] in _NEUTRALE_VORSILBEN else 1)
+    return best
+
+def _name_score(zutat_staemme, produkt_staemme):
+    """Bester Treffer über alle Wortpaare (3/2 sicher, 1 unsicher). Auch 1, wenn das Produkt die
+    Zutat am Wortanfang enthält (Tomaten → Tomatenmark) – das ist meist etwas anderes."""
+    best = 0
+    for a in zutat_staemme:
+        for b in produkt_staemme:
+            s = _wort_score(a, b)
+            if not s and len(a) >= 4 and a in b:
+                s = 1
+            if s > best:
+                best = s
+    return best
+
+def _produkt_index(produkte):
+    """Produkte nach Namen gruppiert (gleicher Name an mehreren Lagerorten = eine Gruppe)."""
+    index = {}
+    for p in produkte:
+        name = (p.name or "").strip()
+        if not name:
+            continue
+        g = index.setdefault(_norm_text(name), {"name": name, "zeilen": [], "staemme": _staemme(name)})
+        g["zeilen"].append(p)
+    return index
+
+def zuordnungen_laden():
+    return {z.begriff: (z.produkt_name or "") for z in ZutatZuordnung.query.all()}
+
+def produkt_fuer_zutat(zutat_name, index, zuordnungen):
+    """Passende Produktgruppe zu einer Zutat → (gruppe | None, art).
+    art: 'zuordnung' (gemerkt), 'auto' (sicherer Namenstreffer), 'unsicher' (nur ähnlich –
+    z.B. Kokosmilch ↔ Milch), 'ignoriert' (gemerkt: nicht prüfen), 'immer' (Leitungswasser)
+    oder '' (nichts gefunden)."""
+    begriff = zutat_begriff(zutat_name)
+    if begriff in zuordnungen:
+        ziel = zuordnungen[begriff].strip()
+        if not ziel:
+            return None, "ignoriert"
+        return index.get(_norm_text(ziel)) or {"name": ziel, "zeilen": [], "staemme": ()}, "zuordnung"
+    staemme = _staemme(zutat_name)
+    if not staemme:
+        return None, ""
+    if all(s in _IMMER_DA for s in staemme):
+        return None, "immer"
+    beste, beste_rang = None, None
+    for key in sorted(index):
+        g = index[key]
+        score = _name_score(staemme, g["staemme"])
+        if not score:
+            continue
+        hat_bestand = any((p.menge or 0) > 0 for p in g["zeilen"])
+        rang = (score, hat_bestand, -len(g["name"]))
+        if beste_rang is None or rang > beste_rang:
+            beste, beste_rang = g, rang
+    if not beste:
+        return None, ""
+    return beste, ("auto" if beste_rang[0] >= 2 else "unsicher")
+
+def zutat_bedarf(z, faktor=1.0):
+    """(Vergleichs-Einheit, Menge darin, kleine_menge?) einer Rezept-Zutat."""
+    menge = max(0.0, float(z.menge or 0)) * faktor
+    k = einheit_schluessel(z.einheit)
+    if k in _EINHEIT_KLEIN:
+        return k, menge, True
+    b = _EINHEIT_BASIS.get(k)
+    if b:
+        return b[0], menge * b[1], False
+    return (k or "stück"), menge, False
+
+def _einheit_label(zeilen, schl):
+    """Anzeigename eines Behälter-Schlüssels ('packung' → 'Packung') aus den Produktzeilen."""
+    for p in zeilen:
+        if einheit_schluessel(p.einheit) == schl:
+            return p.einheit
+    return None
+
+def _menge_text(zeilen, schl, wert, label, anbruch):
+    """Bestand für die Anzeige. Behälter ohne Inhalt: '2 Packung + 1 angebrochene' statt
+    '2,4 Packung' – vom offenen Rest kennt man dann nur den Füllstand."""
+    if schl in ("g", "ml", "stück"):
+        return basis_text(wert, schl, label)
+    label = label or schl
+    passend = [p for p in zeilen if (einheit_schluessel(p.einheit) or "stück") == schl]
+    menge = sum(max(0.0, float(p.menge or 0)) for p in passend)
+    offen = sum(1 for p in passend if p.id in anbruch and (p.menge or 0) >= 1)
+    if not offen:
+        return f"{zahl_de(menge)} {label}"
+    voll = menge - offen
+    if voll <= 1e-9:
+        return f"{offen} angebrochene {label}"
+    return f"{zahl_de(voll)} {label} + {offen} angebrochene"
+
+def _einkauf_menge(zeilen, schl, fehl):
+    """Fehlmenge in der Einheit des Produkts → (Name, Menge, Einheit); Packungen/Dosen aufgerundet.
+    Zeilen mit Packungsinhalt zuerst – gekauft werden ganze Packungen."""
+    for p in sorted(zeilen, key=lambda p: not (p.inhalt and p.inhalt > 0)):
+        eb = einheit_basis(p.einheit)
+        if eb and eb[0] == schl:
+            return p.name.strip(), round(fehl / eb[1], 2), p.einheit
+        if not eb and (einheit_schluessel(p.einheit) or "stück") == schl:
+            return p.name.strip(), max(1, math.ceil(fehl - 1e-6)), p.einheit or "Stück"
+        if p.inhalt and p.inhalt > 0:
+            ib = einheit_basis(p.inhalt_einheit)
+            if ib and ib[0] == schl:
+                return p.name.strip(), max(1, math.ceil(fehl / (p.inhalt * ib[1]) - 1e-6)), p.einheit
+    return None
+
+def rezept_abgleich(rezept, faktor=1.0, produkte=None):
+    """Vergleicht die Zutaten eines Rezepts mit dem Vorrat.
+    Rechnet Einheiten um (g/kg, ml/l, Packung → Inhalt), zählt alle Lagerorte eines Produkts
+    zusammen und summiert den Bedarf, wenn mehrere Zutaten dasselbe Produkt brauchen
+    (Butter für Teig + Füllung). Liefert je Zutat ein dict mit status ok|wenig|fehlt|da|ignoriert,
+    Anzeigetexten und 'einkauf' = (Name, Menge, Einheit) für die Einkaufsliste oder None."""
+    if produkte is None:
+        produkte = Produkt.query.all()
+    index = _produkt_index(produkte)
+    zuordnungen = zuordnungen_laden()
+    anbruch = anbruch_prozente()
+
+    eintraege = []
+    for z in rezept.zutaten:
+        gruppe, art = produkt_fuer_zutat(z.name, index, zuordnungen)
+        schl, bedarf, klein = zutat_bedarf(z, faktor)
+        zeilen = gruppe["zeilen"] if gruppe else []
+        bestand = {}
+        for p in zeilen:
+            for k, v in produkt_bestaende(p, anbruch.get(p.id)).items():
+                bestand[k] = bestand.get(k, 0.0) + v
+        eintraege.append({"zutat": z, "gruppe": gruppe, "art": art, "schl": schl,
+                          "bedarf": bedarf, "klein": klein, "zeilen": zeilen, "bestand": bestand})
+
+    # Mehrere Zutaten → dasselbe Produkt: Bedarf zusammenzählen (nur sichere Treffer)
+    summe = {}
+    for e in eintraege:
+        if e["zeilen"] and not e["klein"] and e["schl"] in e["bestand"] and e["art"] != "unsicher":
+            k = (_norm_text(e["gruppe"]["name"]), e["schl"])
+            summe[k] = summe.get(k, 0.0) + e["bedarf"]
+
+    ergebnis = []
+    gruppen_einkauf = {}  # je fehlendem Produkt genau ein Einkaufsposten (am ersten Eintrag)
+    for e in eintraege:
+        z, zeilen, bestand, schl, art = e["zutat"], e["zeilen"], e["bestand"], e["schl"], e["art"]
+        name = e["gruppe"]["name"] if e["gruppe"] else ""
+        hat_etwas = any(v > 1e-9 for v in bestand.values())
+        status, text, hinweis, einkauf = "fehlt", "", "", None
+        rezept_posten = (z.name.strip(), round(max(0.0, float(z.menge or 0)) * faktor, 2) or 1,
+                         z.einheit or "Stück")
+        if art in ("ignoriert", "immer"):
+            status = "ignoriert"
+            text = "wird nicht geprüft" if art == "ignoriert" else "aus der Leitung"
+        elif not zeilen:
+            text = f"{name}: nicht mehr im Vorrat" if name else "nicht im Vorrat"
+            einkauf = rezept_posten
+        else:
+            if not e["klein"] and schl in bestand:
+                label = _einheit_label(zeilen, schl)
+                noetig = e["bedarf"] if art == "unsicher" else summe[(_norm_text(name), schl)]
+                da = bestand[schl]
+                menge_txt = _menge_text(zeilen, schl, da, label, anbruch)
+                if da >= noetig - 1e-6:
+                    status = "ok"
+                elif da > 1e-9:
+                    status = "wenig"
+                if noetig > e["bedarf"] + 1e-6:
+                    hinweis = f"mit anderen Zutaten zusammen {basis_text(noetig, schl, label)} nötig"
+            else:
+                # Kleine Menge (EL, Prise) oder Einheiten nicht vergleichbar (400 g ↔ Dose ohne Inhalt)
+                p0 = zeilen[0]
+                eb0 = einheit_basis(p0.einheit)
+                k0 = eb0[0] if eb0 else (einheit_schluessel(p0.einheit) or "stück")
+                menge_txt = _menge_text(zeilen, k0, bestand.get(k0, 0), p0.einheit, anbruch)
+                if hat_etwas:
+                    status = "da"
+                if not e["klein"] and schl in ("g", "ml") and not eb0 and not (p0.inhalt and p0.inhalt > 0):
+                    hinweis = f"Tipp: beim Produkt „Inhalt pro {p0.einheit}“ eintragen"
+            if status == "fehlt":
+                text = f"{name}: aufgebraucht"
+            elif e["klein"]:
+                text = f"{name}: vorhanden"
+            elif status == "wenig":
+                text = f"{name}: nur {menge_txt} da"
+            else:
+                text = f"{name}: {menge_txt} da"
+            if art == "unsicher":
+                # Nur ähnlicher Name (Kokosmilch ↔ Milch): nicht darauf verlassen → einkaufen
+                status = "unsicher"
+                text = f"vielleicht {name}? ({menge_txt + ' da' if hat_etwas else 'aufgebraucht'})"
+                hinweis = "Passt das? Mit 🔗 bestätigen oder anderes Produkt wählen"
+                einkauf = rezept_posten
+            elif status in ("fehlt", "wenig"):
+                gk = _norm_text(name)
+                ge = gruppen_einkauf.setdefault(gk, {"index": len(ergebnis), "name": name,
+                                                     "zeilen": zeilen, "fehl": None})
+                if not e["klein"] and schl in bestand and ge["fehl"] is None:
+                    ge["fehl"] = (schl, summe[(gk, schl)] - bestand[schl])
+        mit_bestand = sum(1 for p in zeilen if (p.menge or 0) > 0)
+        if mit_bestand > 1 and art != "unsicher":
+            hinweis = (hinweis + " · " if hinweis else "") + f"an {mit_bestand} Lagerorten"
+        if art in ("zuordnung", "unsicher"):
+            auswahl = name  # unsicher: Vorschlag vorausgewählt → Speichern bestätigt ihn
+        elif art == "ignoriert":
+            auswahl = "__ignorieren__"
+        else:
+            auswahl = "__auto__"
+        ergebnis.append({
+            "zutat": z,
+            "vorrat": zeilen[0] if zeilen else None,
+            "vorhanden": status in ("ok", "da", "ignoriert"),
+            "status": status,
+            "text": text,
+            "hinweis": hinweis,
+            "produkt_id": zeilen[0].id if zeilen else None,
+            "begriff": zutat_begriff(z.name),
+            "zugeordnet": art in ("zuordnung", "ignoriert"),
+            "auswahl": auswahl,
+            "einkauf": einkauf,
+        })
+    # Fehlende Produkte: Fehlmenge in Produkt-Einheit (Packungen aufgerundet), sonst 1 Einheit
+    for ge in gruppen_einkauf.values():
+        einkauf = _einkauf_menge(ge["zeilen"], *ge["fehl"]) if ge["fehl"] else None
+        if not einkauf:
+            p0 = ge["zeilen"][0]
+            einkauf = (ge["name"], 1, p0.einheit or "Stück")
+        ergebnis[ge["index"]]["einkauf"] = einkauf
+    return ergebnis
+
+def rezepte_mit_produkt(p):
+    """Rezepte, deren Zutaten (laut Abgleich) dieses Produkt verwenden."""
+    index = _produkt_index(Produkt.query.all())
+    zuordnungen = zuordnungen_laden()
+    mein_key = _norm_text((p.name or "").strip())
+    meine = index.get(mein_key)
+    if not meine:
+        return []
+    treffer = []
+    for r in Rezept.query.order_by(Rezept.name).all():
+        for z in r.zutaten:
+            # Schnellfilter: nur Zutaten, die überhaupt zu diesem Produkt passen könnten
+            if zutat_begriff(z.name) not in zuordnungen and not _name_score(_staemme(z.name), meine["staemme"]):
+                continue
+            g, art = produkt_fuer_zutat(z.name, index, zuordnungen)
+            if g and art in ("auto", "zuordnung") and _norm_text(g["name"]) == mein_key:
+                treffer.append(r)
+                break
+    return treffer
+
 # ── Routen: Übersicht ──────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -505,6 +970,9 @@ def index():
 
     kat_filter = request.args.get("kategorie", "")
     ort_filter = request.args.get("lagerort", "")
+    # Filter merken – die Produktseite führt mit "← Übersicht" genau hierher zurück
+    session["filter"] = {"kategorie": kat_filter, "lagerort": ort_filter,
+                         "herkunft": request.args.get("herkunft", "")}
 
     if kat_filter:
         produkte = [p for p in produkte if p.kategorie == kat_filter]
@@ -514,7 +982,7 @@ def index():
     # angebrochen/gebinde/eingefroren/herkunft direkt per SQL laden
     try:
         _conn = sqlite3.connect(DB_PATH)
-        _rows = _conn.execute("SELECT id, angebrochen, gebinde, eingefroren, herkunft, markierung, eingekocht FROM produkt").fetchall()
+        _rows = _conn.execute("SELECT id, angebrochen, gebinde, eingefroren, herkunft, markierung, eingekocht, angebrochen_prozent FROM produkt").fetchall()
         _conn.close()
         _angebrochen_ids = set(r[0] for r in _rows if r[1])
         _gebinde_map = {r[0]: int(r[2] or 0) for r in _rows}
@@ -522,6 +990,7 @@ def index():
         _herkunft_map = {r[0]: (r[4] or "") for r in _rows}
         _markierung_map = {r[0]: (r[5] or "") for r in _rows}
         _eingekocht_ids = set(r[0] for r in _rows if r[6])
+        _prozent_map = {r[0]: (100 if r[7] is None else r[7]) for r in _rows}
     except:
         _angebrochen_ids = set()
         _gebinde_map = {}
@@ -529,11 +998,14 @@ def index():
         _herkunft_map = {}
         _markierung_map = {}
         _eingekocht_ids = set()
+        _prozent_map = {}
 
     _frost_orte = frost_lagerorte()
     for p in produkte:
         p.mhd_status = mhd_status(p.mhd)
         p.ist_angebrochen = p.id in _angebrochen_ids
+        p.inhalt_text, p.gesamt_text, p.offen_text = produkt_inhalt_infos(
+            p, _prozent_map.get(p.id, 100) if p.ist_angebrochen else None)
         p.gebinde_wert = _gebinde_map.get(p.id, 0)
         p.ist_eingekocht = p.id in _eingekocht_ids
         # eingefroren = manuell markiert ODER ❄️-Gefrierfach-Lagerort (nicht wenn eingekocht)
@@ -568,6 +1040,27 @@ def index():
     )
 
 # ── Routen: Produkte ───────────────────────────────────────────────────────────
+
+def uebersicht_url(produkt_id=None):
+    """Übersicht mit dem zuletzt benutzten Filter – auf Wunsch direkt an der Zeile des Produkts."""
+    f = session.get("filter") or {}
+    url = url_for("index", kategorie=f.get("kategorie") or None, lagerort=f.get("lagerort") or None,
+                  herkunft=f.get("herkunft") or None)
+    return url + (f"#p{int(produkt_id)}" if produkt_id else "")
+
+def produkt_form_kontext():
+    """Auswahllisten und Vorgaben für das Produktformular (_produkt_felder.html) –
+    gleich für "Neues Produkt" und das Bearbeiten auf der Produktseite."""
+    return dict(lagerorte=stammdaten_liste("lagerort"),
+                kategorien=stammdaten_liste("kategorie"),
+                einheiten=stammdaten_liste("einheit"),
+                inhalt_einheiten=INHALT_EINHEITEN,
+                frost_orte=sorted(frost_lagerorte()),
+                richtwerte=EINFRIER_RICHTWERT,
+                einkoch_richtwerte=EINKOCH_RICHTWERT,
+                herkunft_optionen=HERKUNFT_OPTIONEN,
+                heute=date.today().isoformat(),
+                vb_default=monate_addieren(date.today(), 12).isoformat())
 
 def vorhandene_lagerorte():
     """Liste aller bereits verwendeten Lagerorte (für Auswahlvorschläge)."""
@@ -683,7 +1176,7 @@ def konserv_effektives_mhd(form, standard_mhd):
         return standard_mhd
     vb = (form.get("verbrauchen_bis") or "").strip()
     if not vb:
-        return standard_mhd
+        return None  # Feld geleert = kein "Verbrauchen bis" (das MHD-Feld ist dann ausgeblendet)
     try:
         return datetime.strptime(vb, "%Y-%m-%d").date()
     except ValueError:
@@ -737,6 +1230,7 @@ def produkt_neu():
             kategorie=request.form.get("kategorie", "Sonstiges"),
             mhd=konserv_effektives_mhd(request.form, standard_mhd)
         )
+        p.inhalt, p.inhalt_einheit = inhalt_aus_formular(request.form, p.einheit)
         db.session.add(p)
         db.session.commit()
         # Neue Werte als Stammdaten sichern (damit sie verwaltbar sind)
@@ -758,107 +1252,90 @@ def produkt_neu():
         _vorwahl = request.args.get("konserv")
     elif request.args.get("frost"):
         _vorwahl = "eingefroren"
-    return render_template("produkt_form.html", produkt=None,
-                           lagerorte=stammdaten_liste("lagerort"),
-                           kategorien=stammdaten_liste("kategorie"),
-                           einheiten=stammdaten_liste("einheit"),
-                           frost_orte=sorted(frost_lagerorte()),
-                           richtwerte=EINFRIER_RICHTWERT,
-                           einkoch_richtwerte=EINKOCH_RICHTWERT,
-                           herkunft_optionen=HERKUNFT_OPTIONEN,
-                           heute=date.today().isoformat(),
-                           vb_default=monate_addieren(date.today(), 12).isoformat(),
-                           konserv_vorwahl=_vorwahl)
+    return render_template("produkt_form.html", produkt=None, konserv_vorwahl=_vorwahl,
+                           zurueck_url=uebersicht_url(), **produkt_form_kontext())
+
+def _zahl_oder_none(wert):
+    """Formularzahl ('12,5' / '' / Unsinn) → float oder None."""
+    v = (wert or "").strip().replace(",", ".")
+    try:
+        return float(v) if v else None
+    except ValueError:
+        return None
+
+def produkt_bild_naehrwerte_notiz_speichern(p, form, dateien):
+    """Bild, Nährwerte und Notiz aus dem Formular der Produktseite übernehmen.
+    Nur Felder, die im Formular stehen – ein alter, noch offener Formular-Tab ohne diese
+    Felder löscht so nichts."""
+    if "notiz" in form:
+        p.notiz = (form.get("notiz") or "").strip()
+    for feld in ("kcal", "eiweiss", "fett", "kohlenhydrate"):
+        if feld in form:
+            setattr(p, feld, _zahl_oder_none(form.get(feld)))
+    if form.get("bild_entfernen") and p.bild:
+        try:
+            os.remove(os.path.join(BILDER_DIR, p.bild))
+        except OSError:
+            pass
+        p.bild = ""
+    datei = dateien.get("bild")
+    if datei and datei.filename:
+        ext = datei.filename.rsplit(".", 1)[-1].lower() if "." in datei.filename else ""
+        if ext in ERLAUBTE_BILD_EXT:
+            os.makedirs(BILDER_DIR, exist_ok=True)
+            dateiname = f"produkt_{p.id}.{ext}"
+            datei.save(os.path.join(BILDER_DIR, dateiname))
+            # vorhandene Bilder mit anderer Endung aufräumen
+            for e in ERLAUBTE_BILD_EXT:
+                if e != ext:
+                    alt = os.path.join(BILDER_DIR, f"produkt_{p.id}.{e}")
+                    if os.path.exists(alt):
+                        try: os.remove(alt)
+                        except OSError: pass
+            p.bild = dateiname
+        else:
+            flash("Bildformat nicht unterstützt (erlaubt: jpg, png, gif, webp).", "danger")
 
 @app.route("/produkt/<int:id>/bearbeiten", methods=["GET", "POST"])
 def produkt_bearbeiten(id):
+    """Speichert das Bearbeiten-Formular der Produktseite – dort wird ein Produkt an EINEM Platz
+    bearbeitet (Klick auf den Namen in der Übersicht). GET: alte Adresse → Produktseite."""
     p = Produkt.query.get_or_404(id)
-    if request.method == "POST":
-        p.name = request.form["name"]
-        p.menge = float(request.form.get("menge", 1) or 1)
-        p.einheit = request.form.get("einheit", "Stück")
-        p.mindestmenge = float(request.form.get("mindestmenge", 1) or 1)
-        p.lagerort = request.form.get("lagerort", "")
-        p.kategorie = request.form.get("kategorie", "Sonstiges")
-        mhd_str = request.form.get("mhd")
-        try:
-            standard_mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
-        except ValueError:
-            standard_mhd = None
-        p.mhd = konserv_effektives_mhd(request.form, standard_mhd)
-        db.session.commit()
-        # Neue Werte als Stammdaten sichern
-        stammdaten_sicherstellen("lagerort", p.lagerort)
-        stammdaten_sicherstellen("kategorie", p.kategorie)
-        stammdaten_sicherstellen("einheit", p.einheit)
-        db.session.commit()
-        # Gebinde direkt per SQL speichern
-        gebinde_val = int(request.form.get("gebinde", 0) or 0)
-        with db.engine.connect() as conn:
-            conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": id})
-            conn.commit()
-        konservierung_felder_speichern(id, request.form)
-        flash(f"'{p.name}' wurde gespeichert.", "success")
-        # Zurück zum gleichen Filter
-        zurueck_kat = request.form.get("zurueck_kat", "") or None
-        zurueck_ort = request.form.get("zurueck_ort", "") or None
-        return redirect(url_for("index", kategorie=zurueck_kat, lagerort=zurueck_ort))
-    # GET – Filter für Rücksprung merken
-    zurueck_kat = request.args.get("zurueck_kat", "")
-    zurueck_ort = request.args.get("zurueck_ort", "")
-    # Gebinde + Frost-Felder direkt per SQL laden
+    if request.method == "GET":
+        return redirect(url_for("produkt_detail", id=id) + "#bearbeiten")
+    p.name = (request.form.get("name") or "").strip() or p.name
+    p.menge = max(0.0, _zahl_oder_none(request.form.get("menge")) or 0.0)
+    p.einheit = request.form.get("einheit", "Stück")
+    p.inhalt, p.inhalt_einheit = inhalt_aus_formular(request.form, p.einheit)
+    p.mindestmenge = max(0.0, _zahl_oder_none(request.form.get("mindestmenge")) or 0.0)
+    p.lagerort = request.form.get("lagerort", "")
+    p.kategorie = request.form.get("kategorie", "Sonstiges")
+    mhd_str = request.form.get("mhd")
     try:
-        with db.engine.connect() as conn:
-            row = conn.execute(db.text("SELECT gebinde, eingefroren, einfrierdatum, herkunft, behaelter, markierung, eingekocht, einkochdatum FROM produkt WHERE id=:id"), {"id": id}).fetchone()
-        p.gebinde_wert = int(row[0] or 0) if row else 0
-        _eingefroren_flag = bool(row[1]) if row else False
-        _einfrierdatum = None
-        if row and row[2]:
-            try:
-                _einfrierdatum = datetime.strptime(str(row[2])[:10], "%Y-%m-%d").date()
-            except ValueError:
-                _einfrierdatum = None
-        p.herkunft = (row[3] or "") if row else ""
-        p.behaelter = (row[4] or "") if row else ""
-        p.markierung = (row[5] or "") if row else ""
-        _eingekocht_flag = bool(row[6]) if row else False
-        _einkochdatum = None
-        if row and row[7]:
-            try:
-                _einkochdatum = datetime.strptime(str(row[7])[:10], "%Y-%m-%d").date()
-            except ValueError:
-                _einkochdatum = None
-    except Exception:
-        p.gebinde_wert = 0
-        _eingefroren_flag = False
-        _einfrierdatum = None
-        p.herkunft = ""
-        p.behaelter = ""
-        p.markierung = ""
-        _eingekocht_flag = False
-        _einkochdatum = None
-    # Methode für die Auswahl (eingekocht hat Vorrang; Frost auch aus Lagerort ableitbar)
-    if _eingekocht_flag:
-        p.konserv_methode = "eingekocht"
-        p.konserv_datum = _einkochdatum
-    elif _eingefroren_flag or bool(p.lagerort and p.lagerort in frost_lagerorte()):
-        p.konserv_methode = "eingefroren"
-        p.konserv_datum = _einfrierdatum
-    else:
-        p.konserv_methode = ""
-        p.konserv_datum = None
-    return render_template("produkt_form.html", produkt=p,
-                           zurueck_kat=zurueck_kat, zurueck_ort=zurueck_ort,
-                           lagerorte=stammdaten_liste("lagerort"),
-                           kategorien=stammdaten_liste("kategorie"),
-                           einheiten=stammdaten_liste("einheit"),
-                           frost_orte=sorted(frost_lagerorte()),
-                           richtwerte=EINFRIER_RICHTWERT,
-                           einkoch_richtwerte=EINKOCH_RICHTWERT,
-                           herkunft_optionen=HERKUNFT_OPTIONEN,
-                           heute=date.today().isoformat(),
-                           vb_default=monate_addieren(date.today(), 12).isoformat(),
-                           konserv_vorwahl="")
+        standard_mhd = datetime.strptime(mhd_str, "%Y-%m-%d").date() if mhd_str else None
+    except ValueError:
+        standard_mhd = None
+    p.mhd = konserv_effektives_mhd(request.form, standard_mhd)
+    produkt_bild_naehrwerte_notiz_speichern(p, request.form, request.files)
+    db.session.commit()
+    # Neue Werte als Stammdaten sichern
+    stammdaten_sicherstellen("lagerort", p.lagerort)
+    stammdaten_sicherstellen("kategorie", p.kategorie)
+    stammdaten_sicherstellen("einheit", p.einheit)
+    db.session.commit()
+    # Gebinde direkt per SQL speichern
+    try:
+        gebinde_val = max(0, int(request.form.get("gebinde", 0) or 0))
+    except ValueError:
+        gebinde_val = 0
+    with db.engine.connect() as conn:
+        conn.execute(db.text("UPDATE produkt SET gebinde=:g WHERE id=:id"), {"g": gebinde_val, "id": id})
+        conn.commit()
+    konservierung_felder_speichern(id, request.form)
+    flash(f"'{p.name}' wurde gespeichert.", "success")
+    if request.form.get("danach") == "uebersicht":
+        return redirect(uebersicht_url(id))
+    return redirect(url_for("produkt_detail", id=id))
 
 @app.route("/produkt/<int:id>/angebrochen", methods=["POST"])
 def produkt_angebrochen(id):
@@ -913,45 +1390,7 @@ def produkt_loeschen(id):
     db.session.delete(p)
     db.session.commit()
     flash(f"'{name}' wurde gelöscht.", "info")
-    kat = request.args.get("kategorie") or None
-    ort = request.args.get("lagerort") or None
-    return redirect(url_for("index", kategorie=kat, lagerort=ort))
-
-@app.route("/produkt/<int:id>/tiefkuehl", methods=["POST"])
-def produkt_tiefkuehl(id):
-    """Konservierungs-Angaben bearbeiten (Datum landet je nach Methode in einfrier-/einkochdatum)."""
-    p = Produkt.query.get_or_404(id)
-    herkunft = (request.form.get("herkunft") or "").strip()
-    behaelter = (request.form.get("behaelter") or "").strip()
-    markierung = (request.form.get("markierung") or "").strip()
-    vb_str = (request.form.get("verbrauchen_bis") or "").strip()
-    if vb_str:
-        try:
-            p.mhd = datetime.strptime(vb_str, "%Y-%m-%d").date()
-        except ValueError:
-            pass
-    else:
-        p.mhd = None  # Feld geleert = kein "Verbrauchen bis" mehr
-    db.session.commit()
-    d_str = (request.form.get("konserv_datum") or "").strip()
-    datum_val = None
-    if d_str:
-        try:
-            datum_val = datetime.strptime(d_str, "%Y-%m-%d").date().isoformat()
-        except ValueError:
-            datum_val = None
-    with db.engine.connect() as conn:
-        r = conn.execute(db.text("SELECT eingekocht FROM produkt WHERE id=:id"), {"id": id}).fetchone()
-        ist_eingekocht = bool(r[0]) if r else False
-        conn.execute(db.text("UPDATE produkt SET herkunft=:h, behaelter=:b, markierung=:m WHERE id=:id"),
-                     {"h": herkunft, "b": behaelter, "m": markierung, "id": id})
-        if ist_eingekocht:
-            conn.execute(db.text("UPDATE produkt SET einkochdatum=:d WHERE id=:id"), {"d": datum_val, "id": id})
-        else:
-            conn.execute(db.text("UPDATE produkt SET einfrierdatum=:d WHERE id=:id"), {"d": datum_val, "id": id})
-        conn.commit()
-    flash("Angaben gespeichert.", "success")
-    return redirect(url_for("produkt_detail", id=id))
+    return redirect(uebersicht_url())  # zuletzt benutzter Filter (aus Übersicht oder Produktseite)
 
 def render_produkt_detail(id, **extra):
     """Baut die Produkt-Detailseite (auch für OFF-Suchergebnisse wiederverwendet)."""
@@ -996,68 +1435,26 @@ def render_produkt_detail(id, **extra):
         p.markierung = ""
     p.status = mhd_status(p.mhd)
     p.tage_bis_mhd = (p.mhd - date.today()).days if p.mhd else None
-    # Verwendet in Rezepten (Namens-Abgleich)
-    rezepte_mit = []
-    for r in Rezept.query.order_by(Rezept.name).all():
-        for z in r.zutaten:
-            zn = (z.name or "").lower()
-            pn = p.name.lower()
-            if zn and (zn in pn or pn in zn):
-                rezepte_mit.append(r)
-                break
+    # Auswahl "Konservierung" im Bearbeiten-Formular (eingekocht hat Vorrang;
+    # Frost auch aus einem ❄️-Lagerort abgeleitet – wie in der Übersicht)
+    p.konserv_methode = "eingekocht" if p.ist_eingekocht else ("eingefroren" if p.ist_eingefroren else "")
+    p.inhalt_text, p.gesamt_text, p.offen_text = produkt_inhalt_infos(
+        p, p.anbruch_prozent if p.ist_angebrochen else None)
+    ib = einheit_basis(p.inhalt_einheit) if p.inhalt_text else None
+    # Inhalt einer ganzen Packung in Basis-Einheit – für die Live-Anzeige am Anbruch-Regler
+    p.inhalt_basis = (p.inhalt * ib[1], ib[0]) if ib else None
+    # Verwendet in Rezepten – gleicher Abgleich wie auf der Rezeptseite (inkl. Zuordnungen)
+    rezepte_mit = rezepte_mit_produkt(p)
     listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
     return render_template("produkt_detail.html", p=p, einkauf_count=einkauf_count,
-                           rezepte_mit=rezepte_mit, listen=listen, **extra)
+                           rezepte_mit=rezepte_mit, listen=listen,
+                           zurueck_url=uebersicht_url(id), konserv_vorwahl="",
+                           **produkt_form_kontext(), **extra)
 
 @app.route("/produkt/<int:id>")
 def produkt_detail(id):
+    """Produktseite: Überblick, schnelle Aktionen und das Bearbeiten-Formular – alles an einem Platz."""
     return render_produkt_detail(id)
-
-@app.route("/produkt/<int:id>/detail-speichern", methods=["POST"])
-def produkt_detail_speichern(id):
-    p = Produkt.query.get_or_404(id)
-    p.notiz = request.form.get("notiz", "").strip()
-
-    def _zahl(name):
-        v = request.form.get(name, "").strip().replace(",", ".")
-        try:
-            return float(v) if v else None
-        except ValueError:
-            return None
-    p.kcal = _zahl("kcal")
-    p.eiweiss = _zahl("eiweiss")
-    p.fett = _zahl("fett")
-    p.kohlenhydrate = _zahl("kohlenhydrate")
-
-    # Bild entfernen
-    if request.form.get("bild_entfernen") and p.bild:
-        try:
-            os.remove(os.path.join(BILDER_DIR, p.bild))
-        except OSError:
-            pass
-        p.bild = ""
-
-    # Bild-Upload
-    datei = request.files.get("bild")
-    if datei and datei.filename:
-        ext = datei.filename.rsplit(".", 1)[-1].lower() if "." in datei.filename else ""
-        if ext in ERLAUBTE_BILD_EXT:
-            dateiname = f"produkt_{id}.{ext}"
-            datei.save(os.path.join(BILDER_DIR, dateiname))
-            # vorhandene Bilder mit anderer Endung aufräumen
-            for e in ERLAUBTE_BILD_EXT:
-                if e != ext:
-                    alt = os.path.join(BILDER_DIR, f"produkt_{id}.{e}")
-                    if os.path.exists(alt):
-                        try: os.remove(alt)
-                        except OSError: pass
-            p.bild = dateiname
-        else:
-            flash("Bildformat nicht unterstützt (erlaubt: jpg, png, gif, webp).", "danger")
-
-    db.session.commit()
-    flash("Produkt-Details gespeichert.", "success")
-    return redirect(url_for("produkt_detail", id=id))
 
 @app.route("/produkt/<int:id>/bild")
 def produkt_bild(id):
@@ -1067,8 +1464,24 @@ def produkt_bild(id):
     from flask import abort
     abort(404)
 
+def off_inhalt_parsen(text):
+    """Packungsinhalt aus der Open-Food-Facts-Angabe 'quantity': '500 g' → (500.0, 'g'),
+    '1,5 l' → (1.5, 'l'), '75 cl' → (750.0, 'ml'); bei '6 x 1,5 l' zählt die Einzelpackung."""
+    t = _norm_text(text).replace(",", ".")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|gr|g|ml|cl|dl|l)\b", t)
+    if not m:
+        return None
+    wert, einheit = float(m.group(1)), m.group(2)
+    if einheit == "gr":
+        einheit = "g"
+    elif einheit in ("cl", "dl"):
+        wert, einheit = wert * (10 if einheit == "cl" else 100), "ml"
+    if not (0 < wert < 1_000_000):
+        return None
+    return round(wert, 3), einheit
+
 def openfoodfacts_abrufen(barcode):
-    """Holt Name, Bild-URL und Nährwerte (je 100 g) von Open Food Facts."""
+    """Holt Name, Bild-URL, Packungsinhalt und Nährwerte (je 100 g) von Open Food Facts."""
     barcode = re.sub(r"\D", "", barcode or "")
     if not barcode:
         return None, "Bitte einen gültigen Barcode (nur Ziffern) eingeben."
@@ -1097,6 +1510,7 @@ def openfoodfacts_abrufen(barcode):
         "name": prod.get("product_name_de") or prod.get("product_name") or "",
         "marke": (prod.get("brands") or "").split(",")[0].strip(),
         "bild_url": prod.get("image_front_url") or prod.get("image_url") or "",
+        "inhalt": off_inhalt_parsen(prod.get("quantity")),
         "kcal": _n("energy-kcal_100g"),
         "eiweiss": _n("proteins_100g"),
         "fett": _n("fat_100g"),
@@ -1110,7 +1524,7 @@ def openfoodfacts_suche(begriff):
     if not begriff:
         return [], "Bitte einen Suchbegriff eingeben."
     UA = {"User-Agent": "HA-Vorratsverwaltung (github.com/jenser1/ha-vorrat-addon)"}
-    felder = "code,product_name,product_name_de,brands,image_front_url,image_front_thumb_url,image_url,nutriments"
+    felder = "code,product_name,product_name_de,brands,quantity,image_front_url,image_front_thumb_url,image_url,nutriments"
 
     produkte = None
     letzter_fehler = ""
@@ -1151,6 +1565,7 @@ def openfoodfacts_suche(begriff):
             "code": code,
             "name": name,
             "marke": marke,
+            "menge": str(prod.get("quantity") or "").strip()[:30],
             "bild": prod.get("image_front_thumb_url") or prod.get("image_front_url") or prod.get("image_url") or "",
             "kcal": kcal,
         })
@@ -1182,6 +1597,11 @@ def produkt_off_import(id):
     for feld in ("kcal", "eiweiss", "fett", "kohlenhydrate"):
         if daten[feld] is not None:
             setattr(p, feld, daten[feld])
+    # Packungsinhalt nur ergänzen, nie einen selbst gepflegten Wert überschreiben
+    inhalt_neu = ""
+    if daten.get("inhalt") and not p.inhalt and not ist_masseinheit(p.einheit):
+        p.inhalt, p.inhalt_einheit = daten["inhalt"]
+        inhalt_neu = f", Inhalt {zahl_de(p.inhalt, 2)} {p.inhalt_einheit}"
 
     bild_ok = True
     if daten["bild_url"]:
@@ -1217,9 +1637,9 @@ def produkt_off_import(id):
     db.session.commit()
     marke = f" ({daten['marke']})" if daten["marke"] else ""
     if bild_ok:
-        flash(f"✅ Nährwerte & Bild von Open Food Facts übernommen{marke}.", "success")
+        flash(f"✅ Nährwerte & Bild von Open Food Facts übernommen{marke}{inhalt_neu}.", "success")
     else:
-        flash(f"Nährwerte übernommen{marke} – Bild konnte nicht geladen werden.", "warning")
+        flash(f"Nährwerte übernommen{marke}{inhalt_neu} – Bild konnte nicht geladen werden.", "warning")
     return redirect(url_for("produkt_detail", id=id))
 
 @app.route("/produkt/<int:id>/menge", methods=["POST"])
@@ -1279,7 +1699,9 @@ def produkt_umlagern(id):
                 mindestmenge=0,
                 lagerort=neuer_ort,
                 kategorie=p.kategorie,
-                mhd=p.mhd
+                mhd=p.mhd,
+                inhalt=p.inhalt,
+                inhalt_einheit=p.inhalt_einheit
             )
             db.session.add(neu)
         db.session.commit()
@@ -1558,16 +1980,13 @@ def rezept_detail(id):
     r = Rezept.query.get_or_404(id)
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
-    # Vorrat-Abgleich
-    abgleich = []
-    for z in r.zutaten:
-        p = Produkt.query.filter(Produkt.name.ilike(f"%{z.name}%")).first()
-        abgleich.append({
-            "zutat": z,
-            "vorrat": p,
-            "vorhanden": p is not None and p.menge >= z.menge
-        })
+    # Vorrat-Abgleich (Einheiten umgerechnet, alle Lagerorte, gemerkte Zuordnungen)
+    produkte = Produkt.query.all()
+    abgleich = rezept_abgleich(r, produkte=produkte)
+    produkt_namen = sorted({(p.name or "").strip() for p in produkte if (p.name or "").strip()},
+                           key=lambda n: n.lower())
     return render_template("rezept_detail.html", rezept=r, abgleich=abgleich,
+        produkt_namen=produkt_namen,
         einkauf_count=einkauf_count, listen=listen,
         mahlzeiten=MAHLZEITEN, heute=date.today())
 
@@ -1619,18 +2038,24 @@ def rezept_zur_liste(rezept, liste_id=None, faktor=1.0):
         liste = EinkaufsListe(name="Einkauf")
         db.session.add(liste)
         db.session.flush()
+    # Fehlmengen aus dem Abgleich: bekannte Produkte in ihrer Einheit (ganze Packungen),
+    # unbekannte Zutaten mit der Rezeptmenge; gleiche Posten zusammengefasst
+    posten = {}
+    for a in rezept_abgleich(rezept, faktor):
+        if not a["einkauf"]:
+            continue
+        name, menge, einheit = a["einkauf"]
+        k = (name.lower(), (einheit or "").lower())
+        if k in posten:
+            posten[k][1] = round(posten[k][1] + menge, 2)
+        else:
+            posten[k] = [name, menge, einheit]
     hinzugefuegt = 0
-    for z in rezept.zutaten:
-        benoetigt = (z.menge or 0) * faktor
-        p = Produkt.query.filter(Produkt.name.ilike(f"%{z.name}%")).first()
-        if not p or p.menge < benoetigt:
-            existiert = Einkaufsliste.query.filter_by(liste_id=liste.id, name=z.name, erledigt=False).first()
-            if not existiert:
-                fehlend = benoetigt - (p.menge if p else 0)
-                e = Einkaufsliste(liste_id=liste.id, name=z.name,
-                    menge=round(max(0, fehlend), 2), einheit=z.einheit)
-                db.session.add(e)
-                hinzugefuegt += 1
+    for name, menge, einheit in posten.values():
+        existiert = Einkaufsliste.query.filter_by(liste_id=liste.id, name=name, erledigt=False).first()
+        if not existiert:
+            db.session.add(Einkaufsliste(liste_id=liste.id, name=name, menge=menge, einheit=einheit))
+            hinzugefuegt += 1
     return hinzugefuegt, liste
 
 @app.route("/rezept/<int:id>/einkaufen", methods=["POST"])
@@ -1640,6 +2065,41 @@ def rezept_einkaufen(id):
     db.session.commit()
     flash(f"{hinzugefuegt} fehlende Zutaten zur Liste '{liste.name}' hinzugefügt.", "success")
     return redirect(url_for("rezept_detail", id=id))
+
+@app.route("/zutat/zuordnen", methods=["POST"])
+def zutat_zuordnen():
+    """Merkt, welches Vorratsprodukt zu einer Zutat gehört (gilt für alle Rezepte):
+    Produktname, '__ignorieren__' (nicht prüfen) oder '__auto__' (Zuordnung löschen)."""
+    rid = request.form.get("rezept_id", type=int)
+    zurueck = url_for("rezept_detail", id=rid) if rid else url_for("rezepte")
+    zutat = (request.form.get("zutat") or "").strip()[:200]
+    begriff = zutat_begriff(zutat) if zutat else ""
+    if not begriff:
+        flash("Keine Zutat angegeben.", "danger")
+        return redirect(zurueck)
+    wahl = (request.form.get("produkt") or "__auto__").strip()[:100]
+    eintrag = ZutatZuordnung.query.filter_by(begriff=begriff).first()
+    if wahl == "__auto__":
+        if eintrag:
+            db.session.delete(eintrag)
+        meldung = f"„{zutat}“ wird wieder automatisch erkannt."
+    else:
+        ziel = ""
+        if wahl != "__ignorieren__":
+            ziel = next((n for n in {(p.name or "").strip() for p in Produkt.query.all()}
+                         if n.lower() == wahl.lower()), None)
+            if not ziel:
+                flash(f"Produkt „{wahl}“ nicht im Vorrat gefunden.", "danger")
+                return redirect(zurueck)
+        if eintrag:
+            eintrag.produkt_name = ziel
+        else:
+            db.session.add(ZutatZuordnung(begriff=begriff, produkt_name=ziel))
+        meldung = (f"„{zutat}“ → {ziel} gemerkt (gilt für alle Rezepte)." if ziel
+                   else f"„{zutat}“ wird nicht mehr aus dem Vorrat geprüft.")
+    db.session.commit()
+    flash(meldung, "success")
+    return redirect(zurueck)
 
 @app.route("/rezept/<int:id>/zum-essensplan", methods=["POST"])
 def rezept_zum_essensplan(id):
@@ -3429,6 +3889,8 @@ def db_migrieren():
             ("markierung", "VARCHAR(30) DEFAULT ''"),
             ("eingekocht", "BOOLEAN DEFAULT 0"),
             ("einkochdatum", "DATE"),
+            ("inhalt", "FLOAT"),
+            ("inhalt_einheit", "VARCHAR(10) DEFAULT ''"),
         ]:
             if tabelle_existiert("produkt") and not spalte_existiert("produkt", spalte):
                 cur.execute(f"ALTER TABLE produkt ADD COLUMN {spalte} {typ}")

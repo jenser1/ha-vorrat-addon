@@ -84,6 +84,15 @@
 }
 .geb-btn        { width: 36px; background: #ffffff; color: #1f2937; font-size: 1.1rem; }
 .geb-btn-kiste  { padding: 0 12px; background: #fef3c7; border-color: #f59e0b; color: #92400e; font-size: 0.74rem; white-space: nowrap; }
+
+/* Rücksprung von der Produktseite (#p123): Zeile unter der festen Kopfleiste zeigen + kurz markieren */
+.table-wrap tr[id] { scroll-margin-top: 80px; }
+.table-wrap tr:target > td { animation: zeile-markieren 2.5s ease-out; }
+@keyframes zeile-markieren { from { background: rgba(251, 146, 60, 0.28); } to { background: transparent; } }
+
+/* Packungsinhalt unter der Menge: "à 500 g · 1,5 kg" / "1 offen: noch 300 g" */
+.menge-inhalt { display: block; font-size: 0.68rem; font-weight: 500; color: var(--muted); white-space: nowrap; }
+.menge-offen  { color: #fb923c; }
 </style>
 
 <!-- Stats -->
@@ -214,13 +223,13 @@
         {%- elif p.menge < p.mindestmenge and p.mindestmenge > 0 -%}{%- set statusfarbe = 'var(--danger)' -%}
         {%- elif p.ist_angebrochen -%}{%- set statusfarbe = '#fb923c' -%}
         {%- endif -%}
-        <tr{% if statusfarbe %} style="--statusfarbe: {{ statusfarbe }};"{% endif %}>
+        <tr id="p{{ p.id }}"{% if statusfarbe %} style="--statusfarbe: {{ statusfarbe }};"{% endif %}>
           <td class="td-name">
             <a href="{{ url_for('produkt_detail', id=p.id) }}"
                style="color:inherit; text-decoration:none;"
                onmouseover="this.style.textDecoration='underline'"
                onmouseout="this.style.textDecoration='none'"
-               title="Details öffnen"><strong>{{ p.name }}</strong></a>
+               title="Öffnen und bearbeiten"><strong>{{ p.name }}</strong></a>
             {% if p.ist_eingefroren %}<span title="Tiefkühl{% if p.herkunft %} · {{ p.herkunft }}{% endif %}{% if p.behaelter %} · {{ p.behaelter }}{% endif %}" style="margin-left:4px;">❄️</span>{% elif p.ist_eingekocht %}<span title="Eingekocht{% if p.herkunft %} · {{ p.herkunft }}{% endif %}{% if p.behaelter %} · {{ p.behaelter }}{% endif %}" style="margin-left:4px;">🥫</span>{% endif %}{% if (p.ist_eingefroren or p.ist_eingekocht) and p.markierung %}<span title="Kennzeichnung" style="margin-left:4px; padding:0 6px; border-radius:5px; background:#e0f2fe; color:#075985; font-family:monospace; font-size:0.78rem;">{{ p.markierung }}</span>{% endif %}
           </td>
           <td class="td-menge">
@@ -249,6 +258,8 @@
               <span class="menge-wert" style="text-align:center; color:{{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
                 {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
                 <span style="display:block; font-size:0.68rem; color:var(--muted);">= {{ (p.menge / p.gebinde_wert)|round(1) }} Kisten</span>
+                {% if p.inhalt_text %}<span class="menge-inhalt">{{ p.inhalt_text }}{% if p.menge > 0 and p.menge != 1 %} · {{ p.gesamt_text }}{% endif %}</span>{% endif %}
+                {% if p.offen_text %}<span class="menge-inhalt menge-offen">1 offen: {{ p.offen_text }}</span>{% endif %}
               </span>
               <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="margin:0;">
                 <input type="hidden" name="aktion" value="erhoehen">
@@ -266,6 +277,8 @@
               </form>
               <span class="menge-wert" style="color: {{ 'var(--danger)' if p.menge < p.mindestmenge else 'inherit' }}">
                 {{ p.menge|int if p.menge == p.menge|int else p.menge }} {{ p.einheit }}
+                {% if p.inhalt_text %}<span class="menge-inhalt">{{ p.inhalt_text }}{% if p.menge > 0 and p.menge != 1 %} · {{ p.gesamt_text }}{% endif %}</span>{% endif %}
+                {% if p.offen_text %}<span class="menge-inhalt menge-offen">1 offen: {{ p.offen_text }}</span>{% endif %}
               </span>
               <form method="post" action="{{ url_for('menge_anpassen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline">
                 <input type="hidden" name="aktion" value="erhoehen">
@@ -299,7 +312,6 @@
                 A
               </button>
             </form>
-            <a href="{{ url_for('produkt_bearbeiten', id=p.id, zurueck_kat=kat_filter or none, zurueck_ort=ort_filter or none) }}" class="btn btn-ghost btn-sm">✏️</a>
             <form method="post" action="{{ url_for('produkt_loeschen', id=p.id, kategorie=kat_filter or none, lagerort=ort_filter or none) }}" style="display:inline"
               onsubmit='return confirm({{ (p.name ~ " wirklich löschen?") | tojson }})'>
               <button type="submit" class="btn btn-ghost btn-sm">🗑️</button>

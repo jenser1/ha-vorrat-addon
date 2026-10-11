@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.7.1
+**Aktuelle Version:** 1.8.0
 
 ---
 
@@ -27,6 +27,8 @@ ha-vorrat-addon/
 ├── hacs.json
 ├── SECURITY.md
 ├── README.md
+├── CHANGELOG.md         # Änderungen je Version – HA zeigt sie beim Update an (Format: "## X.Y.Z")
+├── .gitattributes       # CHANGELOG.md immer mit LF (sonst greift HAs Regex nicht)
 ├── repository.json      # HA-Repository-Metadaten (name, url, maintainer)
 ├── icon.png / logo.png  # Add-on-Icon (Store/Seitenleiste) + Logo (Infoseite/README)
 └── app/
@@ -36,7 +38,9 @@ ha-vorrat-addon/
     └── templates/
         ├── base.html              # Layout, Bottom-Nav, Themes
         ├── index.html             # Produktübersicht mit Stepper
-        ├── produkt_form.html      # Produkt anlegen/bearbeiten
+        ├── produkt_form.html      # Neues Produkt anlegen
+        ├── produkt_detail.html    # Produktseite: Überblick + EIN Bearbeiten-Formular
+        ├── _produkt_felder.html   # Include: Grundfelder (Neu + Produktseite)
         ├── einkauf_uebersicht.html # Einkaufslisten-Übersicht
         ├── einkauf.html           # Einkaufsliste Detail
         ├── rezepte.html           # Rezeptübersicht
@@ -58,6 +62,11 @@ Produkt: id, name, menge, einheit, mindestmenge, lagerort,
          angebrochen_prozent, eingefroren, einfrierdatum, herkunft,
          behaelter, markierung, eingekocht, einkochdatum
          (alle Konservierungs-/Zusatzspalten: nur per Raw-SQL, nicht im ORM)
+         inhalt (Float, Inhalt je Einheit, z.B. 500), inhalt_einheit (g|kg|ml|l|Stück)
+         (normale ORM-Spalten + ALTER-TABLE-Migration; bei g/kg/ml/l immer leer)
+
+ZutatZuordnung: id, begriff (normalisierter Zutatenname, UNIQUE), produkt_name
+                ("" = Zutat nicht aus dem Vorrat prüfen) – gemerkte 🔗-Zuordnung, gilt für alle Rezepte
 
 EinkaufsListe: id, name, erstellt
 
@@ -102,6 +111,16 @@ _gebinde_map = {r[0]: int(r[2] or 0) for r in _rows}
 Die App läuft hinter HA Ingress (Pfad-Prefix).
 Lösung: ReverseProxied Middleware + immer url_for() nutzen,
 nie hardcodierte Pfade!
+Auf dem Handy läuft sie in der **Home-Assistant-App** (Companion) als Seitenleisten-Eintrag
+(„In der Seitenleiste anzeigen“). Panel-Pfad = `/<slug>` (lokal `/local_vorratsverwaltung`,
+aus dem Store `/<8-Zeichen-Hash>_vorratsverwaltung` – je Installation anders, in Doku nie fest
+eintragen). „Zum Startbildschirm“ im Browser greift nicht (Seite läuft im Ingress-iframe, der
+Browser nimmt das HA-Manifest) → README empfiehlt HA-App + Android-Verknüpfung bzw.
+iOS-Kurzbefehl `homeassistant://navigate/<pfad>`.
+
+### Benennung in Home Assistant (seit 2026.2)
+Add-ons heißen in der HA-Oberfläche „Apps“: **Einstellungen → Apps → App-Store → ⋮ → Repositories**.
+Technisch unverändert (config.yaml, repository.json, /addons-API) – nur Menünamen in Doku anpassen.
 
 ### CSRF-Schutz
 Token pro Session (`csrf_token()`). `before_request` prüft POST/PUT/PATCH/DELETE;
@@ -127,6 +146,22 @@ Produkte können eine Gebindegröße haben (z.B. 12 für 12er-Kiste).
 In der Übersicht: zwei Stepper (Kiste und Einzeln).
 Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 
+### Packungsinhalt & Vorrat-Abgleich
+- `menge` zählt weiter Packungen/Dosen; `inhalt` sagt, wie viel in **einer** Einheit steckt.
+  Eine angebrochene Packung zählt mit ihrem Rest: `menge - 1 + angebrochen_prozent/100`
+  (`produkt_bestaende()` liefert je Vergleichs-Einheit, z.B. `{'packung': 2.6, 'g': 1300}`).
+- Einheiten: `einheit_basis()` → Masse g, Volumen ml, Anzahl Stück; Behälter (Packung, Dose …)
+  nur über `inhalt` umrechenbar. EL/TL/Prise = „kleine Menge“ → vorhanden, sobald etwas da ist.
+- `rezept_abgleich(rezept, faktor)` ist die **eine** Quelle für Rezeptseite, „Fehlende Zutaten
+  hinzufügen“ (`rezept_zur_liste`, auch Essensplan) und „verwendet in Rezepten“. Gleicher
+  Produktname an mehreren Lagerorten = eine Gruppe; Bedarf mehrerer Zutaten fürs selbe
+  Produkt wird summiert; Fehlmenge geht in Produkt-Einheit auf die Liste (Packungen aufgerundet).
+- Namensvergleich (`produkt_fuer_zutat`): gemerkte Zuordnung > sicherer Treffer (gleiches Wort,
+  Synonym `_ZUTAT_SYNONYME`, Grundwort mit neutraler Vorsilbe `_NEUTRALE_VORSILBEN`:
+  Weizen|mehl, Schlag|sahne) > **unsicher** (Kokos|milch ↔ Milch, Tomaten → Tomaten|mark).
+  Unsicher wird ❓ angezeigt und zur Sicherheit eingekauft, bis per 🔗 bestätigt.
+  Wasser/Leitungswasser (`_IMMER_DA`) wird nie als fehlend gemeldet.
+
 ---
 
 ## Features
@@ -135,8 +170,17 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Produktverwaltung mit MHD, Mindestmenge, Lagerort, Kategorie
 - Farbränder: rot (abgelaufen/unter Minimum), orange (Warnung/angebrochen)
 - Angebrochen-Status mit orangem Rahmen
-- Produkt-Detailseite (Klick auf Namen): Bild, Nährwerte, Notiz, "verwendet in Rezepten"
-  - Route /produkt/<id>, Speichern /produkt/<id>/detail-speichern, Bild /produkt/<id>/bild
+- Produktseite (Klick auf Namen) = EINZIGER Platz zum Bearbeiten (Wunsch des Users):
+  oben Überblick + Schnell-Aktionen (+/−, Anbruch-Regler), darunter EIN Formular „✏️ Bearbeiten“
+  (alle Grundfelder + Konservierung + Bild + Nährwerte + Notiz, multipart) → POST /produkt/<id>/bearbeiten
+  - Grundfelder als Include `_produkt_felder.html` – gemeinsam mit „Neues Produkt“ (produkt_form.html)
+  - GET /produkt/<id>/bearbeiten leitet nur noch auf /produkt/<id>#bearbeiten (alte Lesezeichen)
+  - Kein ✏️-Knopf mehr in der Übersicht; alte Routen /detail-speichern und /tiefkuehl entfernt
+  - „Speichern & zur Übersicht“ → `uebersicht_url(id)`: zuletzt benutzter Filter (session["filter"],
+    gesetzt in index()) + Sprung zur Zeile `#p<id>` (scroll-margin + kurze Markierung per :target)
+  - Bild/Nährwerte/Notiz nur übernehmen, wenn das Feld im Formular steht (alter Tab löscht nichts)
+  - JS-Schutz: ungespeicherte Formular-Änderungen → Rückfrage vor +/−, Anbruch, OFF, Wegnavigieren
+  - Route /produkt/<id>, Bild /produkt/<id>/bild
   - Bild-Upload nach BILDER_DIR (/share/vorratsverwaltung/bilder), send_from_directory
   - Open Food Facts: /produkt/<id>/off-suche (Namenssuche) + /off-import (per Barcode/code)
     openfoodfacts_suche() nutzt search.openfoodfacts.org (Fallback /cgi/search.pl)
@@ -144,14 +188,15 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
   - Route /produkt/<id>/anbruch (aktion=start/stop/set); unter 15 % → menge-1, angebrochen=0
   - farbige Füll-Div (orange, <15 % rot), Slider transparent darüber (WebKit-tauglich)
 - Konservierung (❄️ Einfrieren / 🥫 Einkochen): Reste/Garten-Ernte haltbar machen
-  - Im Produktformular (produkt_neu/bearbeiten): Auswahl "Konservierung" (Keine/eingefroren/eingekocht)
+  - Im Produktformular (Neu + Produktseite): Auswahl "Konservierung" (Keine/eingefroren/eingekocht)
     blendet Herkunft/Behälter/Kennzeichnung/Art/Datum/Verbrauchen-bis ein
     (konserv_effektives_mhd, konservierung_felder_speichern); Buttons → /produkt/neu?konserv=…
+    „Verbrauchen bis“ geleert → kein Datum (mhd = None)
   - mhd = "Verbrauchen bis" = Datum + Richtwert (monate_addieren; EINFRIER_RICHTWERT bzw. EINKOCH_RICHTWERT)
   - Spalten eingefroren/einfrierdatum/eingekocht/einkochdatum/herkunft/behaelter/markierung
   - Kennzeichnung als Pille + ❄️/🥫-Badge in der Übersicht; Herkunft-Filter
   - eingefroren = Flag ODER Lagerort ist Gefrierfach (abgeleitet), aber nicht wenn eingekocht
-  - Konservierungs-Karte auf der Produktseite: Route /produkt/<id>/tiefkuehl (Datum je Methode)
+  - Produktseite zeigt Tiefkühl/Eingekocht, Datum, Kennzeichnung, Behälter im Kopf; bearbeitet wird im Formular
   - Lagerorte als Gefrierfach markierbar (Stammdaten.ist_frost, Route /stammdaten/frost)
   - Sensoren sensor.vorrat_tiefkuehl + sensor.vorrat_eingekocht
 - Gebinde-Funktion (Kisten, Pakete) mit zwei Steppern
@@ -218,13 +263,24 @@ DB_PATH=/tmp/vorrat.db python app.py
 
 ### HA Add-on
 1. Ordner nach `/addons/ha-vorrat-addon/` kopieren
-2. HA: Add-on Store → Lokale Add-ons neu einlesen
+2. HA: Einstellungen → Apps → App-Store (früher „Add-on Store") → ⋮ → lokale Apps neu einlesen
 3. Installieren & starten
 
-### GitHub Update
-1. Version in `config.yaml` erhöhen
-2. Dateien auf GitHub ersetzen
-3. Release erstellen (z.B. v1.5.0)
+### CHANGELOG.md (zeigt HA beim Update an)
+- Liegt im Repo-Root **neben `config.yaml`** (= App-Ordner). HA-Core (`hassio/update.py`,
+  `async_release_notes`) schneidet per Regex `^#* <neue Version>\n … bis ^#* <installierte Version>`
+  den passenden Teil aus → Überschriften **exakt `## X.Y.Z`** (kein Datum, kein „v", kein Zusatz),
+  neueste oben, **LF-Zeilenenden** (`.gitattributes`: `CHANGELOG.md text eol=lf`).
+  Passt die Überschrift nicht, zeigt HA den kompletten Changelog.
+- Laufende Arbeit sammelt sich unter `## Nächste Version`; die Nummer wählt der User beim Release.
+- README enthält nur noch einen Verweis auf die CHANGELOG.md (nicht doppelt pflegen).
+- Prüfskript-Idee: Regex aus HA nachbauen und 1.7.1 → X.Y.Z simulieren (zeigt nur die neuen Einträge?).
+
+### GitHub Update (Release – nur nach Release-OK des Users)
+1. `CHANGELOG.md`: `## Nächste Version` → `## X.Y.Z` (vom User gewählte Nummer)
+2. Version in `config.yaml` auf dieselbe Nummer setzen
+3. Commit, Tag `vX.Y.Z`, push
+4. Release auf GitHub aus dem Tag erstellen
 
 Git-Identität: repo-lokal `Jens <150123042+jenser1@users.noreply.github.com>` (verknüpft
 Commits mit dem GitHub-Account; die globale Identität auf dem PC ist „BuildTools" von Spigot –
@@ -245,10 +301,17 @@ Commits bis v1.7.0 laufen deshalb noch unter diesem Namen).
 | Event `vorrat_kochtimer_fertig` „nicht da" | HA listet Custom-Events nirgends | Entwicklerwerkzeuge → Ereignisse lauschen, oder Sensor-Trigger `sensor.vorrat_kochtimer` → `fertig` |
 | REST-Sensor nach HA-Neustart weg | `POST /api/states` ist nicht persistent | Sensor regelmäßig neu setzen (5-Min-Schleife) |
 | Web-Import „URL abgelehnt (interne Adresse gesperrt)" | SSRF-Schutz (`url_sicher`) – gewollt | Nur öffentliche Rezeptseiten importierbar; LAN/HA-intern ist gesperrt |
+| Rezept: Zutat „❓ vielleicht …?" | Nur ähnlicher Name (zusammengesetztes Wort) – gewollt vorsichtig | Per 🔗 bestätigen/zuordnen; ggf. Vorsilbe in `_NEUTRALE_VORSILBEN` ergänzen |
+| Rezept: „Tipp: Inhalt pro Dose eintragen" | Rezept in g/ml, Produkt als Dose/Packung ohne Inhalt | Beim Produkt „Inhalt pro …" setzen, dann rechnet der Abgleich |
 
 ---
 
 ## Nächste geplante Features
+- „Gekocht → Zutaten abziehen“: Dialog im Rezept + am Ende des Kochmodus (Portionen,
+  Haken je Zutat, offene Packung zuerst, dann frühestes MHD, Rückgängig) – baut auf
+  `rezept_abgleich()`/`produkt_bestaende()` auf
+- Übersicht aufräumen: Filter als 3 Auswahllisten, Kacheln anklickbar, „A“-Knopf als Symbol
+- Doppelte Lagerorte (z.B. „Küche“ + „Küche “ mit Leerzeichen) zusammenführen + beim Speichern strippen
 - Übersetzungen: Niederländisch, Polnisch
 - Pull Requests von Community willkommen
 - HACS Default Repository (wenn genug Stars)

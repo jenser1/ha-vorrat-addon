@@ -28,3 +28,7 @@ Thumbs.db
 
 # ZIP Releases
 *.zip
+
+# Persönliche Claude-Code-Angaben (nie hochladen)
+CLAUDE.local.md
+.claude/settings.local.json

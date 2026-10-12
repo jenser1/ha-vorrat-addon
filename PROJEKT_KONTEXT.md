@@ -282,9 +282,8 @@ DB_PATH=/tmp/vorrat.db python app.py
 3. Commit, Tag `vX.Y.Z`, push
 4. Release auf GitHub aus dem Tag erstellen
 
-Git-Identität: repo-lokal `Jens <150123042+jenser1@users.noreply.github.com>` (verknüpft
-Commits mit dem GitHub-Account; die globale Identität auf dem PC ist „BuildTools" von Spigot –
-Commits bis v1.7.0 laufen deshalb noch unter diesem Namen).
+Persönliche Einstellungen des Maintainers (Git-Identität, Entwicklungs-PC, eigene HA-Installation)
+stehen in `CLAUDE.local.md` – per `.gitignore` vom Upload ausgeschlossen.
 
 ---
 

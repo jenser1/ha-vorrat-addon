@@ -1,5 +1,11 @@
 # Changelog
 
+## Nächste Version
+
+### 🛠️ Entwicklung
+- Neu: **CLAUDE.md** – Anleitung für die Weiterentwicklung mit Claude Code (Befehle, Testmuster, Architektur, Release-Ablauf)
+- Persönliche Angaben gehören in eine eigene `CLAUDE.local.md`; sie ist per `.gitignore` ausgeschlossen und wird nie hochgeladen
+
 ## 1.8.0
 
 ### ⚖️ Packungsinhalt

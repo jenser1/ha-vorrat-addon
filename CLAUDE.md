@@ -90,9 +90,14 @@ CSS-Variablen in `base.html`).
 - Beim Release: Überschrift → exakt `## X.Y.Z` (kein Datum/„v"/Zusatz – HA schneidet die Update-Hinweise
   per Regex zwischen neuer und installierter Version aus, sonst zeigt es den ganzen Changelog),
   `version` in `config.yaml` gleich setzen, bei neuer Minor-Version die Tabelle in `SECURITY.md`,
-  `**Aktuelle Version:**` in `PROJEKT_KONTEXT.md`. Dann Commit, Tag `vX.Y.Z`, Push von `main` + Tag.
-- `CHANGELOG.md` muss LF-Zeilenenden behalten (`.gitattributes`); die README enthält keinen Changelog,
-  nur einen Verweis.
+  `**Aktuelle Version:**` in `PROJEKT_KONTEXT.md`, README-Changelog nachziehen (siehe unten).
+  Dann Commit, Tag `vX.Y.Z`, Push von `main` + Tag.
+- **README-Abschnitt „📝 Changelog"** zeigt immer genau **die aktuelle und die vorherige Version**
+  (`### X.Y.Z – aktuelle Version` / `### X.Y.Z – vorherige Version`, Text wörtlich aus `CHANGELOG.md`,
+  Unterüberschriften dort `####`) plus Verweis auf `CHANGELOG.md`. Beim Release die neue Version oben
+  einfügen, die bisherige zur „vorherigen" machen, die älteste entfernen. `## Nächste Version` gehört
+  nicht in die README.
+- `CHANGELOG.md` muss LF-Zeilenenden behalten (`.gitattributes`).
 
 Persönliche Einstellungen (Git-Identität, Entwicklungs-PC, eigene HA-Installation) gehören in
 `CLAUDE.local.md` – per `.gitignore` ausgeschlossen, wird nicht hochgeladen.

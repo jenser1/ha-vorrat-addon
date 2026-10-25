@@ -94,7 +94,7 @@ Automatisch verfügbare HA-Sensoren:
    <br><sub>Bis Home Assistant 2026.1 hießen Apps noch „Add-ons": *Einstellungen → Add-ons → Add-on Store → ⋮ → Repositories*</sub>
 2. URL hinzufügen: `https://github.com/jenser1/ha-vorrat-addon`
 3. **Vorratsverwaltung** installieren & starten
-4. Auf der Info-Seite **„In der Seitenleiste anzeigen"** einschalten – dann steht die Vorratsverwaltung links in der Seitenleiste von Home Assistant, **im Browser und in der Home-Assistant-App auf dem Handy**
+4. Auf der Info-Seite **„In der Seitenleiste anzeigen"** einschalten – dann steht die Vorratsverwaltung links in der Seitenleiste von Home Assistant, **im Browser und in der Home-Assistant-App auf dem Handy** – auch für Benutzer **ohne Admin-Rechte** (z. B. die ganze Familie)
 
 
 
@@ -241,5 +241,67 @@ Hast du einen Fehler gefunden oder eine Idee für ein neues Feature?
 
 ## 📝 Changelog
 
-Alle Änderungen – auch die der nächsten Version – stehen in der **[CHANGELOG.md](CHANGELOG.md)**.
+Hier stehen die **aktuelle und die vorherige Version**. Alle älteren Versionen – und was für die nächste
+Version schon fertig ist – stehen in der **[CHANGELOG.md](CHANGELOG.md)**.
 Home Assistant zeigt beim Update der App automatisch die neuen Einträge an.
+
+### 1.8.1 – aktuelle Version
+
+#### 🍳 „Gekocht“ – Zutaten aus dem Vorrat abbuchen
+- Neuer Knopf **„🍳 Gekocht“** auf der Rezeptseite: Ein Dialog fragt die Portionen ab und zeigt vorab, was aus welchem Produkt abgebucht wird. Einzelne Zutaten lassen sich abwählen (z. B. wenn du ein anderes Öl genommen hast)
+- Abgebucht wird mit demselben Abgleich wie auf der Rezeptseite (g ↔ kg, ml ↔ l, Packung über den Packungsinhalt, gemerkte 🔗-Zuordnungen)
+- Packungsware bleibt ganz: 250 g aus „3 Packung à 1 kg“ ergibt **2 Packung + 1 angebrochene (75 %)**. Zuerst wird die angebrochene Packung verbraucht, dann die mit dem frühesten MHD
+- Zu wenig da → alles Vorhandene wird abgebucht, der Rest gilt als fehlend
+- Fehlt etwas oder ist es nur ähnlich (❓), wird nichts abgebucht. Danach kannst du die fehlenden Zutaten gezielt **auf die Einkaufsliste setzen** – nichts passiert automatisch
+- Nicht umrechenbare Einheiten (z. B. 400 g ↔ Dose ohne Inhalt) erscheinen unter **„Manuell prüfen“**, mit Tipp zum Packungsinhalt. Prise, Msp. und Leitungswasser werden nie abgebucht
+- **↩️ Rückgängig** direkt in der Ergebniskarte. Produkte, die du inzwischen geändert hast, bleiben dabei unangetastet
+- Am Rezept: **„🍳 3× gekocht · zuletzt vor 5 Tagen“** – auch auf den Rezeptkarten, dazu die neue Sortierung **„Zuletzt gekocht“**
+- Auch am Ende des **Kochmodus** und im **Essensplaner** (🍳 am geplanten Rezept, mit dessen Personenzahl)
+
+#### ⚖️ Löffelmaße
+- **EL/TL** werden jetzt umgerechnet (1 EL ≈ 15 ml bzw. 15 g, 1 TL ≈ 5 ml bzw. 5 g), je nachdem, ob das Produkt in ml oder g geführt wird. „2 EL Öl“ zeigt also z. B. „Öl: 750 ml da“ statt nur „vorhanden“. Gilt für Rezeptseite, Einkaufsliste und Abbuchen
+- „Esslöffel“/„Teelöffel“ werden als EL/TL erkannt
+
+#### 📱 Kleinigkeiten
+- Die Vorratsverwaltung erscheint jetzt auch bei Benutzern **ohne Admin-Rechte** in der Seitenleiste (`panel_admin: false`) – z. B. für die ganze Familie
+- Rezeptseite auf dem Handy: Die Knöpfe oben zeigen nur noch das Symbol, damit die Leiste nicht über den Rand läuft
+- README zeigt die Änderungen der **aktuellen und der vorherigen Version** direkt an, ältere stehen weiter in der CHANGELOG.md
+
+#### 🛠️ Entwicklung
+- Neu: **CLAUDE.md** – Anleitung für die Weiterentwicklung mit Claude Code (Befehle, Testmuster, Architektur, Release-Ablauf)
+- Persönliche Angaben gehören in eine eigene `CLAUDE.local.md`; sie ist per `.gitignore` ausgeschlossen und wird nie hochgeladen
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Koch-Zähler und „zuletzt gekocht“) – vorhandene Daten bleiben unverändert.
+
+### 1.8.0 – vorherige Version
+
+#### ⚖️ Packungsinhalt
+- Neues Feld **„Inhalt pro Packung/Dose/Stück"** (z. B. 500 g, 1 l) – freiwillig
+- Übersicht zeigt z. B. **„3 Packung · à 500 g · 1,5 kg"**, bei angebrochenen Packungen zusätzlich **„1 offen: noch 700 g"**
+- Der „Angebrochen"-Regler zeigt den Rest auch in Gramm bzw. ml
+- Open Food Facts trägt den Packungsinhalt automatisch ein und zeigt die Packungsgröße schon in den Suchtreffern
+
+#### 🍳 Rezept-Abgleich mit echten Mengen
+- Rechnet g ↔ kg, ml ↔ l und Packungen (über den Packungsinhalt) um und zählt alle Lagerorte eines Produkts zusammen
+- Erkennt Schreibweisen: Zwiebel/Zwiebeln, Hackfleisch/Gehacktes, „Mehl (Type 405)", Weizenmehl → Mehl
+- Status je Zutat: ✅ genug da · ⚠️ zu wenig · 🛒 fehlt · ❓ unsicher (nur ähnlicher Name, z. B. Kokosmilch ↔ Milch) · ➖ nicht geprüft (z. B. Leitungswasser)
+- **🔗 Zuordnung merken**: eine Zutat einmal einem Vorratsprodukt zuordnen – gilt dann für alle Rezepte (oder „nicht prüfen")
+- Braucht ein Rezept dasselbe Produkt mehrmals (z. B. Butter für Teig und Füllung), wird der Bedarf zusammengezählt
+- „Fehlende Zutaten hinzufügen" – auch im Essensplaner – schreibt die echte Fehlmenge auf die Einkaufsliste, bei Packungsware als ganze Packungen
+- „Verwendet in Rezepten" auf der Produktseite nutzt denselben Abgleich
+
+#### ✏️ Bearbeiten an einem Platz
+- Klick auf den Produktnamen öffnet die Produktseite – dort stehen **alle Angaben in einem Formular** (Name, Menge, Inhalt, Lagerort, Kategorie, MHD, Gebinde, Einfrieren/Einkochen, Bild, Nährwerte, Notiz) mit einem Speichern-Knopf
+- **„Speichern & zur Übersicht"** springt zurück zur Zeile des Produkts – mit dem vorher gewählten Filter
+- Rückfrage, bevor ungespeicherte Änderungen verloren gehen
+- Der ✏️-Knopf in der Übersicht und die getrennten Formulare (Bild/Nährwerte/Notiz, Tiefkühl-Karte) entfallen
+
+#### 📱 Handy & Kleinigkeiten
+- Rezeptseite auf Handy/Tablet untereinander – die Zutatenliste wird nicht mehr abgeschnitten
+- Kopfleiste der Produktseite am Handy kompakt (nur Symbole)
+- Mengen mit mehreren Nachkommastellen (z. B. 2,75) lassen sich speichern; eine frei eingetragene Herkunft bleibt beim Speichern erhalten
+- README: Nutzung über die **Home-Assistant-App** genau beschrieben, Menüpfade für Home Assistant 2026.2 („Apps" statt „Add-ons") aktualisiert
+- Neu: die **CHANGELOG.md** – Home Assistant zeigt sie beim Update an
+- Security-Policy auf 1.8.x aktualisiert
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Packungsinhalt und Zutaten-Zuordnungen) – vorhandene Daten bleiben unverändert.

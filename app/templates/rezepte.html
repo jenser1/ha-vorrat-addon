@@ -31,7 +31,15 @@
      class="btn btn-sm {% if sort == 'kategorie' %}btn-primary{% else %}btn-ghost{% endif %}">📂 Kategorie</a>
   <a href="{{ url_for('rezepte', kategorie=kat_filter, sort='neu') }}"
      class="btn btn-sm {% if sort == 'neu' or not sort %}btn-primary{% else %}btn-ghost{% endif %}">🕒 Neueste</a>
+  <a href="{{ url_for('rezepte', kategorie=kat_filter, sort='gekocht') }}"
+     class="btn btn-sm {% if sort == 'gekocht' %}btn-primary{% else %}btn-ghost{% endif %}">🍳 Zuletzt gekocht</a>
 </div>
+
+{% macro gekocht_info(r) -%}
+  {% if r.koch_zaehler %}<span style="color:var(--muted); font-size:0.75rem;"
+    {%- if r.zuletzt_gekocht %} title="zuletzt am {{ r.zuletzt_gekocht.strftime('%d.%m.%Y') }}"{% endif %}>🍳 {{ r.koch_zaehler }}×
+    {%- if r.zuletzt_gekocht %} · {{ r.zuletzt_gekocht|seit }}{% endif %}</span>{% endif %}
+{%- endmacro %}
 
 <!-- Gruppenansicht nach Kategorie -->
 {% if sort == 'kategorie' %}
@@ -50,6 +58,7 @@
           <div style="display:flex; gap:6px; flex-wrap:wrap;">
             <span class="kat-tag">{{ r.kategorie }}</span>
             <span style="color:var(--muted); font-size:0.75rem;">{{ r.portionen }} Port.</span>
+            {{ gekocht_info(r) }}
           </div>
         </div>
       </a>
@@ -78,6 +87,7 @@
           <span class="kat-tag">{{ r.kategorie }}</span>
           <span style="color:var(--muted); font-size:0.75rem;">{{ r.portionen }} Port.</span>
           <span style="color:var(--muted); font-size:0.75rem;">{{ r.zutaten|length }} Zutaten</span>
+          {{ gekocht_info(r) }}
         </div>
       </div>
     </a>

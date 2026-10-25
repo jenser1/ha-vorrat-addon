@@ -1,10 +1,32 @@
 # Changelog
 
-## Nächste Version
+## 1.8.1
+
+### 🍳 „Gekocht“ – Zutaten aus dem Vorrat abbuchen
+- Neuer Knopf **„🍳 Gekocht“** auf der Rezeptseite: Ein Dialog fragt die Portionen ab und zeigt vorab, was aus welchem Produkt abgebucht wird. Einzelne Zutaten lassen sich abwählen (z. B. wenn du ein anderes Öl genommen hast)
+- Abgebucht wird mit demselben Abgleich wie auf der Rezeptseite (g ↔ kg, ml ↔ l, Packung über den Packungsinhalt, gemerkte 🔗-Zuordnungen)
+- Packungsware bleibt ganz: 250 g aus „3 Packung à 1 kg“ ergibt **2 Packung + 1 angebrochene (75 %)**. Zuerst wird die angebrochene Packung verbraucht, dann die mit dem frühesten MHD
+- Zu wenig da → alles Vorhandene wird abgebucht, der Rest gilt als fehlend
+- Fehlt etwas oder ist es nur ähnlich (❓), wird nichts abgebucht. Danach kannst du die fehlenden Zutaten gezielt **auf die Einkaufsliste setzen** – nichts passiert automatisch
+- Nicht umrechenbare Einheiten (z. B. 400 g ↔ Dose ohne Inhalt) erscheinen unter **„Manuell prüfen“**, mit Tipp zum Packungsinhalt. Prise, Msp. und Leitungswasser werden nie abgebucht
+- **↩️ Rückgängig** direkt in der Ergebniskarte. Produkte, die du inzwischen geändert hast, bleiben dabei unangetastet
+- Am Rezept: **„🍳 3× gekocht · zuletzt vor 5 Tagen“** – auch auf den Rezeptkarten, dazu die neue Sortierung **„Zuletzt gekocht“**
+- Auch am Ende des **Kochmodus** und im **Essensplaner** (🍳 am geplanten Rezept, mit dessen Personenzahl)
+
+### ⚖️ Löffelmaße
+- **EL/TL** werden jetzt umgerechnet (1 EL ≈ 15 ml bzw. 15 g, 1 TL ≈ 5 ml bzw. 5 g), je nachdem, ob das Produkt in ml oder g geführt wird. „2 EL Öl“ zeigt also z. B. „Öl: 750 ml da“ statt nur „vorhanden“. Gilt für Rezeptseite, Einkaufsliste und Abbuchen
+- „Esslöffel“/„Teelöffel“ werden als EL/TL erkannt
+
+### 📱 Kleinigkeiten
+- Die Vorratsverwaltung erscheint jetzt auch bei Benutzern **ohne Admin-Rechte** in der Seitenleiste (`panel_admin: false`) – z. B. für die ganze Familie
+- Rezeptseite auf dem Handy: Die Knöpfe oben zeigen nur noch das Symbol, damit die Leiste nicht über den Rand läuft
+- README zeigt die Änderungen der **aktuellen und der vorherigen Version** direkt an, ältere stehen weiter in der CHANGELOG.md
 
 ### 🛠️ Entwicklung
 - Neu: **CLAUDE.md** – Anleitung für die Weiterentwicklung mit Claude Code (Befehle, Testmuster, Architektur, Release-Ablauf)
 - Persönliche Angaben gehören in eine eigene `CLAUDE.local.md`; sie ist per `.gitignore` ausgeschlossen und wird nie hochgeladen
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Koch-Zähler und „zuletzt gekocht“) – vorhandene Daten bleiben unverändert.
 
 ## 1.8.0
 

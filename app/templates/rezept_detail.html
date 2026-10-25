@@ -4,23 +4,132 @@
 
 {% block topbar_actions %}
   {% if rezept.anleitung %}
-  <button type="button" class="btn btn-primary" onclick="kochmodusOeffnen()" style="margin-right:8px;">👨‍🍳 Kochmodus</button>
+  <button type="button" class="btn btn-primary" onclick="kochmodusOeffnen()" style="margin-right:8px;" title="Kochmodus" aria-label="Kochmodus">👨‍🍳<span class="tb-text"> Kochmodus</span></button>
   {% endif %}
-  <button type="button" class="btn btn-primary" onclick="essensplanOeffnen()">📅 Zum Essensplan</button>
-  <a href="{{ url_for('rezept_bearbeiten', id=rezept.id) }}" class="btn btn-ghost" style="margin-left:8px;">✏️ Bearbeiten</a>
+  <button type="button" class="btn btn-primary" onclick="gekochtOeffnen()" style="margin-right:8px;" title="Gekocht – Zutaten aus dem Vorrat abbuchen" aria-label="Gekocht – Zutaten abbuchen">🍳<span class="tb-text"> Gekocht</span></button>
+  <button type="button" class="btn btn-primary" onclick="essensplanOeffnen()" title="Zum Essensplan" aria-label="Zum Essensplan">📅<span class="tb-text"> Zum Essensplan</span></button>
+  <a href="{{ url_for('rezept_bearbeiten', id=rezept.id) }}" class="btn btn-ghost" style="margin-left:8px;" title="Bearbeiten" aria-label="Bearbeiten">✏️<span class="tb-text"> Bearbeiten</span></a>
   <form method="post" action="{{ url_for('rezept_loeschen', id=rezept.id) }}" style="display:inline"
     onsubmit="return confirm('Rezept wirklich löschen?')">
-    <button type="submit" class="btn btn-ghost" style="margin-left:8px;">🗑️ Löschen</button>
+    <button type="submit" class="btn btn-ghost" style="margin-left:8px;" title="Löschen" aria-label="Löschen">🗑️<span class="tb-text"> Löschen</span></button>
   </form>
 {% endblock %}
 
 {% block content %}
 
 <style>
+  /* Handy: Topbar-Knöpfe nur als Symbol (Text als title/aria-label) – sonst läuft die Leiste über */
+  @media (max-width: 760px){
+    .topbar-actions{ gap:4px; }
+    .topbar-actions .btn{ margin:0 !important; padding:6px 9px; }
+    .tb-text{ display:none; }
+  }
   /* Zwei Spalten am PC; auf Handy/Tablet untereinander (sonst wird die Zutatenliste abgeschnitten) */
   .rezept-grid{ display:grid; grid-template-columns:minmax(0, 1fr) 340px; gap:20px; align-items:start; }
   @media (max-width: 1000px){ .rezept-grid{ grid-template-columns:minmax(0, 1fr); } }
+  /* 🍳 Gekocht: Dialog-Vorschau + Ergebniskarte */
+  .gk-titel{ font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+             color:var(--muted); margin:12px 0 6px; }
+  .gk-zeile{ display:flex; align-items:flex-start; gap:10px; padding:7px 10px; border-radius:9px;
+             background:var(--bg); margin-bottom:5px; font-size:0.88rem; line-height:1.35; }
+  .gk-wahl{ cursor:pointer; }
+  /* base.html setzt appearance:none für alle inputs → Checkbox wieder normal darstellen */
+  .gk-wahl input[type="checkbox"]{ -webkit-appearance:checkbox; appearance:auto; width:20px; height:20px;
+                                   padding:0; margin:1px 0 0; flex:none; accent-color:var(--primary); }
+  .gk-inhalt{ flex:1; min-width:0; }
+  .gk-klein{ font-size:0.78rem; color:var(--muted); }
+  .gk-block{ display:block; }
+  .gk-warn{ color:var(--warning); font-weight:600; }
+  .gk-klein a{ color:inherit; }
+  .gk-modal{ display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:2500; /* über dem Timer-Knopf */
+             align-items:center; justify-content:center; padding:16px; }
+  .gk-box{ max-width:480px; width:100%; margin:0; max-height:calc(100vh - 32px); display:flex; flex-direction:column; }
+  .gk-vorschau{ overflow-y:auto; overflow-x:hidden; flex:1; min-height:60px; margin:4px 0 14px; }
+  .gk-fuss{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
 </style>
+
+{% if gekocht %}
+{% set g_ab = gekocht.posten | selectattr("status", "in", ["abbuchen", "teilweise"]) | list %}
+{% set g_fehlt = gekocht.posten | selectattr("status", "equalto", "fehlt") | list %}
+{% set g_pruefen = gekocht.posten | selectattr("status", "equalto", "pruefen") | list %}
+{% set g_nicht = gekocht.posten | selectattr("status", "in", ["klein", "ignoriert", "abgewaehlt"]) | list %}
+<div class="card" id="gekocht-ergebnis" style="border-left:4px solid var(--success);">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+    <span class="card-title">🍳 Gekocht · {{ gekocht.portionen }} Portionen</span>
+    <a href="{{ url_for('rezept_detail', id=rezept.id) }}" class="btn btn-ghost btn-sm" title="Schließen" aria-label="Ergebnis schließen">✕</a>
+  </div>
+
+  {% if g_ab %}
+    <div class="gk-titel">Aus dem Vorrat abgebucht</div>
+    {% for e in g_ab %}
+    <div class="gk-zeile">
+      <span>{{ '⚠️' if e.status == 'teilweise' else '✅' }}</span>
+      <span class="gk-inhalt"><b>{{ e.menge_text }} {{ e.name }}</b>
+        <span class="gk-klein gk-block">
+          {%- if e.status == 'teilweise' %}<span class="gk-warn">nur {{ e.genommen_text }} da, fehlt: {{ e.fehl_text }}</span> · {% elif e.loeffel_text %}{{ e.loeffel_text }} · {% endif -%}
+          aus <a href="{{ url_for('produkt_detail', id=e.produkt_id) }}">{{ e.produkt }}</a>{% if e.orte %} ({{ e.orte|join(', ') }}){% endif %} · {{ e.noch_text }}
+        </span>
+      </span>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="gk-klein" style="margin-top:8px;">Aus dem Vorrat wurde nichts abgebucht.</p>
+  {% endif %}
+
+  {% if g_fehlt or gekocht.einkauf %}
+    <div class="gk-titel">🛒 Fehlt</div>
+    {% for e in g_fehlt %}
+    <div class="gk-zeile"><span class="gk-inhalt">{{ e.menge_text }} {{ e.name }} <span class="gk-klein">– {{ e.text }}</span></span></div>
+    {% endfor %}
+    {% if gekocht.liste %}
+      <p class="gk-klein" style="margin-top:6px;">✅ Auf die Einkaufsliste „{{ gekocht.liste }}“ gesetzt.</p>
+    {% elif gekocht.einkauf %}
+    <form method="post" action="{{ url_for('rezept_gekocht_einkaufen', id=rezept.id) }}" style="margin-top:8px;">
+      <input type="hidden" name="token" value="{{ gekocht_token }}">
+      <div class="gk-klein" style="margin-bottom:5px;">Auf die Einkaufsliste:</div>
+      {% for name, menge, einheit in gekocht.einkauf %}
+      <label class="gk-zeile gk-wahl">
+        <input type="checkbox" name="posten" value="{{ loop.index0 }}" checked>
+        <span class="gk-inhalt">{{ name }} <span class="gk-klein">– {{ menge|zahl(2) }} {{ einheit }}</span></span>
+      </label>
+      {% endfor %}
+      <div class="gk-fuss" style="margin-top:8px;">
+        <select name="liste_id" style="flex:1; min-width:160px; padding:8px 10px; border:1px solid var(--border);
+                border-radius:8px; font-size:0.88rem;">
+          {% for l in listen %}<option value="{{ l.id }}">🛒 {{ l.name }}</option>{% else %}<option value="">➕ Neue Liste „Einkauf“</option>{% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary">🛒 Auf Einkaufsliste setzen</button>
+      </div>
+    </form>
+    {% endif %}
+  {% endif %}
+
+  {% if g_pruefen %}
+    <div class="gk-titel">🔍 Manuell prüfen – nicht abgebucht</div>
+    {% for e in g_pruefen %}
+    <div class="gk-zeile"><span class="gk-inhalt">{{ e.menge_text }} {{ e.name }}
+      <span class="gk-klein">– {% if e.produkt_id %}<a href="{{ url_for('produkt_detail', id=e.produkt_id) }}">{{ e.text }}</a>{% else %}{{ e.text }}{% endif %}</span></span></div>
+    {% endfor %}
+  {% endif %}
+
+  {% if g_nicht %}
+    <p class="gk-klein" style="margin:10px 0 0;">➖ Nicht abgebucht:
+      {% for e in g_nicht %}{{ e.name }}{% if e.status == 'abgewaehlt' %} (abgewählt){% elif e.status == 'klein' %} ({{ e.menge_text }}){% endif %}{{ ', ' if not loop.last }}{% endfor %}</p>
+  {% endif %}
+
+  <div class="gk-fuss">
+    <form method="post" action="{{ url_for('rezept_gekocht_rueckgaengig', id=rezept.id) }}"
+          onsubmit="return confirm('Abbuchung zurücknehmen? Vorrat und Zähler werden wie vorher.')">
+      <input type="hidden" name="token" value="{{ gekocht_token }}">
+      <button type="submit" class="btn btn-ghost btn-sm">↩️ Rückgängig</button>
+    </form>
+    {% if gekocht.woche is not none %}
+    <a href="{{ url_for('essensplan', woche=gekocht.woche) }}" class="btn btn-ghost btn-sm">📅 Zurück zum Essensplan</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <div class="rezept-grid">
 
   <!-- Links: Info + Anleitung -->
@@ -48,6 +157,10 @@
         {% if rezept.kochzeit %}<span>🍳 Kochen/Backen {{ rezept.kochzeit|dauer }}</span>{% endif %}
         {% if rezept.gesamtzeit %}<span>⏰ Gesamt {{ rezept.gesamtzeit|dauer }}</span>{% endif %}
         <span>📅 {{ rezept.erstellt.strftime('%d.%m.%Y') }}</span>
+        {% if rezept.koch_zaehler %}
+        <span{% if rezept.zuletzt_gekocht %} title="zuletzt am {{ rezept.zuletzt_gekocht.strftime('%d.%m.%Y') }}"{% endif %}>🍳 {{ rezept.koch_zaehler }}× gekocht
+          {%- if rezept.zuletzt_gekocht %} · zuletzt {{ rezept.zuletzt_gekocht|seit }}{% endif %}</span>
+        {% endif %}
       </div>
     </div>
 
@@ -200,7 +313,89 @@
   </div>
 </div>
 
+<!-- Modal: 🍳 Gekocht – Vorschau (abwählbar), dann abbuchen -->
+<div id="gekocht-modal" class="gk-modal">
+  <div class="card gk-box">
+    <div class="card-title" style="margin-bottom:12px;">🍳 „{{ rezept.name }}“ gekocht</div>
+    <form method="post" action="{{ url_for('rezept_gekocht', id=rezept.id) }}"
+          onsubmit="return gekochtAbsenden()" style="display:flex; flex-direction:column; min-height:0; flex:1;">
+      {% if koch_woche is not none %}
+      <input type="hidden" name="von" value="essensplan">
+      <input type="hidden" name="woche" value="{{ koch_woche }}">
+      {% endif %}
+      <div class="form-group" style="margin-bottom:6px;">
+        <label for="gk-portionen">🍽️ Für wie viele Portionen?</label>
+        <input type="number" name="portionen" id="gk-portionen" min="1" max="999" step="1" value="{{ koch_portionen }}">
+      </div>
+      <div id="gk-vorschau" class="gk-vorschau"><p class="gk-klein">Lade Vorschau …</p></div>
+      <div style="display:flex; gap:10px;">
+        <button type="submit" id="gk-ok" class="btn btn-primary" style="flex:1;" disabled>✅ Abbuchen</button>
+        <button type="button" class="btn btn-ghost" onclick="gekochtSchliessen()">Abbrechen</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <script>
+// ===== 🍳 Gekocht: Vorschau laden (abgewählte Zutaten bleiben beim Ändern der Portionen abgewählt) =====
+var GK_VORSCHAU_URL = {{ url_for('rezept_gekocht_vorschau', id=rezept.id)|tojson }};
+var gkAbgewaehlt = {};
+var gkAnfrage = 0;
+var gkTimer = null;
+
+function gekochtOeffnen() {
+  document.getElementById('gekocht-modal').style.display = 'flex';
+  gekochtVorschauLaden();
+}
+function gekochtSchliessen() { document.getElementById('gekocht-modal').style.display = 'none'; }
+
+function gekochtVorschauLaden() {
+  var box = document.getElementById('gk-vorschau');
+  var ok = document.getElementById('gk-ok');
+  var portionen = document.getElementById('gk-portionen').value || '';
+  var nr = ++gkAnfrage;
+  ok.disabled = true;
+  fetch(GK_VORSCHAU_URL + '?portionen=' + encodeURIComponent(portionen), { credentials: 'same-origin' })
+    .then(function(r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.text(); })
+    .then(function(html) {
+      if (nr !== gkAnfrage) { return; }
+      box.innerHTML = html;
+      var boxen = box.querySelectorAll('input[name="zutat"]');
+      for (var i = 0; i < boxen.length; i++) {
+        if (gkAbgewaehlt[boxen[i].value]) { boxen[i].checked = false; }
+        boxen[i].addEventListener('change', function() { gkAbgewaehlt[this.value] = !this.checked; });
+      }
+      ok.disabled = false;
+    })
+    .catch(function() {
+      if (nr !== gkAnfrage) { return; }
+      box.innerHTML = '<p class="gk-klein">⚠️ Vorschau konnte nicht geladen werden – bitte Seite neu laden.</p>';
+    });
+}
+
+function gekochtAbsenden() {
+  var ok = document.getElementById('gk-ok');
+  if (ok.disabled) { return false; }   // Vorschau lädt noch – sonst doppelt/blind abbuchen
+  ok.disabled = true;
+  ok.textContent = '⏳ Wird abgebucht …';
+  return true;
+}
+
+document.getElementById('gk-portionen').addEventListener('input', function() {
+  clearTimeout(gkTimer);
+  gkTimer = setTimeout(gekochtVorschauLaden, 350);
+});
+document.getElementById('gk-portionen').addEventListener('keydown', function(e) {
+  // Enter (auch „Los“ auf dem Handy) aktualisiert nur die Vorschau, bucht nicht sofort ab
+  if (e.key === 'Enter') { e.preventDefault(); clearTimeout(gkTimer); gekochtVorschauLaden(); }
+});
+document.getElementById('gekocht-modal').addEventListener('click', function(e) {
+  if (e.target === this) gekochtSchliessen();
+});
+{% if koch_auto %}
+document.addEventListener('DOMContentLoaded', gekochtOeffnen);
+{% endif %}
+
 function essensplanOeffnen() { document.getElementById('essensplan-modal').style.display = 'flex'; }
 function essensplanSchliessen() { document.getElementById('essensplan-modal').style.display = 'none'; }
 document.getElementById('essensplan-modal').addEventListener('click', function(e) {
@@ -221,7 +416,7 @@ document.getElementById('zuordnung-modal').addEventListener('click', function(e)
   if (e.target === this) zuordnungSchliessen();
 });
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') { zuordnungSchliessen(); }
+  if (e.key === 'Escape') { zuordnungSchliessen(); gekochtSchliessen(); }
 });
 </script>
 
@@ -284,6 +479,8 @@ document.addEventListener('keydown', function(e) {
   <div class="koch-body">
     <div id="koch-schrittnr" class="koch-schrittnr"></div>
     <div id="koch-schritt" class="koch-schritt"></div>
+    <button type="button" id="koch-gekocht" class="btn btn-primary" style="display:none; align-self:center;"
+            onclick="kochmodusSchliessen(); gekochtOeffnen();">🍳 Gekocht – Zutaten abbuchen</button>
   </div>
   {% if abgleich %}
   <div id="koch-zutaten" class="koch-zutaten" hidden>
@@ -347,6 +544,8 @@ function kochRender(){
   var zurueck = document.getElementById('koch-zurueck');
   var weiter = document.getElementById('koch-weiter');
   var gesamt = kochSchritte.length;
+  var gekocht = document.getElementById('koch-gekocht');
+  if(gekocht){ gekocht.style.display = (gesamt === 0 || kochIndex >= gesamt - 1) ? '' : 'none'; }
   if(gesamt === 0){
     nr.textContent = '';
     el.textContent = 'Keine Zubereitung hinterlegt.';

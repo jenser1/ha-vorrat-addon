@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.8.0
+**Aktuelle Version:** 1.8.1
 
 ---
 
@@ -76,7 +76,8 @@ Einkaufsliste: id, liste_id, name, menge, einheit,
 
 Rezept: id, name, beschreibung, anleitung, portionen,
         kategorie, quell_url, erstellt,
-        vorbereitungszeit, kochzeit, gesamtzeit (Minuten, optional; normale ORM-Spalten + ALTER-TABLE-Migration wie quell_url)
+        vorbereitungszeit, kochzeit, gesamtzeit (Minuten, optional; normale ORM-Spalten + ALTER-TABLE-Migration wie quell_url),
+        zuletzt_gekocht (Date), koch_zaehler (Integer, 0) – „🍳 Gekocht“
 
 RezeptZutat: id, rezept_id, name, menge, einheit
 
@@ -151,7 +152,9 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
   Eine angebrochene Packung zählt mit ihrem Rest: `menge - 1 + angebrochen_prozent/100`
   (`produkt_bestaende()` liefert je Vergleichs-Einheit, z.B. `{'packung': 2.6, 'g': 1300}`).
 - Einheiten: `einheit_basis()` → Masse g, Volumen ml, Anzahl Stück; Behälter (Packung, Dose …)
-  nur über `inhalt` umrechenbar. EL/TL/Prise = „kleine Menge“ → vorhanden, sobald etwas da ist.
+  nur über `inhalt` umrechenbar. EL/TL (`_LOEFFEL`: 15/5) werden je nach Produkt in ml oder g
+  umgerechnet (Näherung 1 EL ≈ 15 ml ≈ 15 g); ohne ml-/g-Bestand – und Prise, Msp. usw. immer –
+  „kleine Menge“ → vorhanden, sobald etwas da ist.
 - `rezept_abgleich(rezept, faktor)` ist die **eine** Quelle für Rezeptseite, „Fehlende Zutaten
   hinzufügen“ (`rezept_zur_liste`, auch Essensplan) und „verwendet in Rezepten“. Gleicher
   Produktname an mehreren Lagerorten = eine Gruppe; Bedarf mehrerer Zutaten fürs selbe
@@ -161,6 +164,22 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
   Weizen|mehl, Schlag|sahne) > **unsicher** (Kokos|milch ↔ Milch, Tomaten → Tomaten|mark).
   Unsicher wird ❓ angezeigt und zur Sicherheit eingekauft, bis per 🔗 bestätigt.
   Wasser/Leitungswasser (`_IMMER_DA`) wird nie als fehlend gemeldet.
+
+### „🍳 Gekocht“ – Zutaten abbuchen
+- `koch_abbuchung(rezept, faktor, ohne)` plant auf Basis von `rezept_abgleich()` (schreibt nichts);
+  dieselbe Funktion liefert die Vorschau (`GET /rezept/<id>/gekocht/vorschau`, per fetch in den
+  Dialog) und die Buchung (`POST /rezept/<id>/gekocht`). Status je Zutat: abbuchen, teilweise,
+  fehlt (auch ❓ unsicher), pruefen (Einheit nicht umrechenbar), klein, ignoriert, abgewaehlt.
+- Abgewählt = `angeboten` − `zutat` (Checkboxen der Vorschau) – so gilt eine Zutat ohne Häkchen-
+  Angebot nie versehentlich als abgewählt.
+- Reihenfolge je Produktgruppe: angebrochene Zeile zuerst, dann frühestes MHD. Packung/Dose/Stück
+  bleiben ganz, der Rest steckt im Anbruch (`_zeile_neu`: menge + angebrochen + angebrochen_prozent,
+  so dass `produkt_bestaende()` genau den Rest ergibt); g/kg/ml/l werden einfach weniger.
+  Keine 15-%-Regel wie beim Schieberegler – es wird exakt gerechnet (Prozent als Ganzzahl).
+- Ergebnis (Anzeige, Einkauf, Rückgängig) liegt nur im Speicher (`_KOCH_ERGEBNISSE`, Token in der
+  URL `?gekocht=…`, max. 30). Rückgängig setzt nur Produkte zurück, deren Stand noch dem nach der
+  Buchung entspricht. `?kochen=<Personen>&von=essensplan&woche=N` öffnet den Dialog (Essensplaner).
+- `Rezept.zuletzt_gekocht` (Date) + `koch_zaehler` (Integer) – ORM-Spalten + ALTER-TABLE-Migration.
 
 ---
 
@@ -273,12 +292,14 @@ DB_PATH=/tmp/vorrat.db python app.py
   neueste oben, **LF-Zeilenenden** (`.gitattributes`: `CHANGELOG.md text eol=lf`).
   Passt die Überschrift nicht, zeigt HA den kompletten Changelog.
 - Laufende Arbeit sammelt sich unter `## Nächste Version`; die Nummer wählt der User beim Release.
-- README enthält nur noch einen Verweis auf die CHANGELOG.md (nicht doppelt pflegen).
+- README zeigt im Abschnitt „📝 Changelog" nur die **aktuelle und die vorherige Version** (wörtlich
+  aus der CHANGELOG.md) plus Verweis; beim Release eine Version nachrücken, die älteste entfernen.
 - Prüfskript-Idee: Regex aus HA nachbauen und 1.7.1 → X.Y.Z simulieren (zeigt nur die neuen Einträge?).
 
 ### GitHub Update (Release – nur nach Release-OK des Users)
 1. `CHANGELOG.md`: `## Nächste Version` → `## X.Y.Z` (vom User gewählte Nummer)
 2. Version in `config.yaml` auf dieselbe Nummer setzen
+2a. README-Changelog: neue Version als „aktuelle", bisherige als „vorherige", älteste raus
 3. Commit, Tag `vX.Y.Z`, push
 4. Release auf GitHub aus dem Tag erstellen
 

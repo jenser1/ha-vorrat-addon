@@ -151,6 +151,8 @@ class Rezept(db.Model):
     kochzeit = db.Column(db.Integer)           # Minuten, optional (cookTime)
     gesamtzeit = db.Column(db.Integer)         # Minuten, optional (totalTime)
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
+    zuletzt_gekocht = db.Column(db.Date, nullable=True)  # zuletzt „🍳 Gekocht“ gedrückt
+    koch_zaehler = db.Column(db.Integer, default=0)      # wie oft gekocht
     zutaten = db.relationship("RezeptZutat", backref="rezept", lazy=True, cascade="all, delete-orphan")
 
 class RezeptZutat(db.Model):
@@ -459,6 +461,26 @@ def mhd_status(mhd):
         return "warnung"
     return "ok"
 
+@app.template_filter("seit")
+def seit_text(d):
+    """Vergangenes Datum lesbar: 'heute', 'gestern', 'vor 5 Tagen', 'vor 3 Wochen', 'vor 2 Monaten'."""
+    if not d:
+        return ""
+    tage = (date.today() - d).days
+    if tage <= 0:
+        return "heute"
+    if tage == 1:
+        return "gestern"
+    if tage < 14:
+        return f"vor {tage} Tagen"
+    if tage < 60:
+        return f"vor {tage // 7} Wochen"
+    if tage < 365:
+        return f"vor {tage // 30} Monaten"
+    if tage < 730:
+        return "vor über einem Jahr"
+    return f"vor {tage // 365} Jahren"
+
 def monate_addieren(d, n):
     """Datum + n Monate (ohne externe Lib). Begrenzt den Tag aufs Monatsende."""
     monat = d.month - 1 + int(n)
@@ -501,10 +523,15 @@ _EINHEIT_ALIAS = {
     "pkg": "packung", "pck": "packung", "pckg": "packung", "pack": "packung", "päckchen": "packung",
     "packungen": "packung", "paket": "packung", "dosen": "dose", "flaschen": "flasche",
     "gläser": "glas", "tüten": "tüte", "scheiben": "scheibe", "zehen": "zehe",
+    "esslöffel": "el", "essl": "el", "teelöffel": "tl", "teel": "tl",
 }
 # Kleine Mengen (Löffel, Gewürze): kein Mengenvergleich – vorhanden, sobald etwas da ist
 _EINHEIT_KLEIN = {"el", "tl", "prise", "prisen", "msp", "messerspitze", "spritzer", "schuss",
                   "etwas", "nach geschmack", "handvoll", "tropfen", "tbsp", "tsp"}
+# Löffelmaße (Näherung): werden in ml bzw. g umgerechnet, je nachdem, wie das Produkt gezählt
+# wird (Öl in ml, Zucker in g) – dann mit echtem Mengenvergleich und Abbuchen.
+# Ohne passendes Produkt bleiben sie „kleine Menge“.
+_LOEFFEL = {"el": 15.0, "tbsp": 15.0, "tl": 5.0, "tsp": 5.0}
 
 def einheit_schluessel(e):
     """Einheit vereinheitlicht für Vergleiche: 'Pkg.' → 'packung', 'Stück' → 'stück'."""
@@ -520,6 +547,7 @@ def ist_masseinheit(e):
     b = einheit_basis(e)
     return bool(b) and b[0] in ("g", "ml")
 
+@app.template_filter("zahl")
 def zahl_de(x, stellen=1):
     """Zahl mit deutschem Komma, ohne überflüssige Nullen: 1.5 → '1,5', 2.0 → '2'."""
     try:
@@ -820,6 +848,11 @@ def rezept_abgleich(rezept, faktor=1.0, produkte=None):
         for p in zeilen:
             for k, v in produkt_bestaende(p, anbruch.get(p.id)).items():
                 bestand[k] = bestand.get(k, 0.0) + v
+        if klein and schl in _LOEFFEL:
+            # Löffelmaß in die Einheit des Produkts: 2 EL Öl → 30 ml, 1 TL Zucker → 5 g
+            basis = "ml" if "ml" in bestand else ("g" if "g" in bestand else None)
+            if basis:
+                schl, bedarf, klein = basis, bedarf * _LOEFFEL[schl], False
         eintraege.append({"zutat": z, "gruppe": gruppe, "art": art, "schl": schl,
                           "bedarf": bedarf, "klein": klein, "zeilen": zeilen, "bestand": bestand})
 
@@ -908,6 +941,9 @@ def rezept_abgleich(rezept, faktor=1.0, produkte=None):
             "zugeordnet": art in ("zuordnung", "ignoriert"),
             "auswahl": auswahl,
             "einkauf": einkauf,
+            # Rohdaten fürs Abbuchen (koch_abbuchung)
+            "art": art, "produkt_name": name, "zeilen": zeilen,
+            "schl": schl, "bedarf": e["bedarf"], "klein": e["klein"],
         })
     # Fehlende Produkte: Fehlmenge in Produkt-Einheit (Packungen aufgerundet), sonst 1 Einheit
     for ge in gruppen_einkauf.values():
@@ -937,6 +973,262 @@ def rezepte_mit_produkt(p):
                 treffer.append(r)
                 break
     return treffer
+
+def posten_zusammenfassen(posten):
+    """Gleiche Einkaufsposten (Name + Einheit) zusammenzählen: [(Name, Menge, Einheit), …]."""
+    erg = {}
+    for name, menge, einheit in posten:
+        k = (name.lower(), (einheit or "").lower())
+        if k in erg:
+            erg[k][1] = round(erg[k][1] + menge, 2)
+        else:
+            erg[k] = [name, menge, einheit]
+    return [tuple(v) for v in erg.values()]
+
+# ── „🍳 Gekocht“: Zutaten aus dem Vorrat abbuchen ──────────────────────────────
+
+def _einheit_groesse(p, schl):
+    """Wie viel der Vergleichs-Einheit schl in EINER Einheit des Produkts steckt:
+    1 kg → 1000 (g), 1 Packung à 500 g → 500 (g), 1 Packung → 1 (packung). None = nicht umrechenbar."""
+    eb = einheit_basis(p.einheit)
+    if eb:
+        if eb[0] == schl:
+            return eb[1]
+    elif (einheit_schluessel(p.einheit) or "stück") == schl:
+        return 1.0
+    if p.inhalt and p.inhalt > 0:
+        ib = einheit_basis(p.inhalt_einheit)
+        if ib and ib[0] == schl:
+            return p.inhalt * ib[1]
+    return None
+
+def _zeile_einheiten(s):
+    """Bestand eines Zeilen-Stands in Produkt-Einheiten – wie produkt_bestaende():
+    eine angebrochene Packung zählt nur mit ihrem Rest."""
+    if s["offen"] and s["menge"] >= 1:
+        return s["menge"] - 1 + s["prozent"] / 100.0
+    return s["menge"]
+
+def _zeile_neu(s, einheiten, teilbar):
+    """Neuer Bestand (in Produkt-Einheiten) → (menge, angebrochen, prozent) wie in der Datenbank.
+    Packung/Dose/Stück bleiben ganz, der Rest steckt in der angebrochenen Packung
+    (3 Packung − ¼ → 2 Packung + 1 angebrochene mit 75 %); g/kg/ml/l werden einfach weniger."""
+    if einheiten <= 1e-6:
+        return 0.0, False, 100
+    if teilbar:
+        if s["offen"]:  # Anbruch-Markierung behalten, solange die Rechnung aufgeht
+            menge = einheiten + 1 - s["prozent"] / 100.0
+            if menge >= 1:
+                return round(menge, 3), True, s["prozent"]
+        return round(einheiten, 3), False, 100
+    voll = math.floor(einheiten + 1e-6)
+    prozent = int(round((einheiten - voll) * 100))
+    if prozent <= 0:
+        return float(voll), False, 100
+    if prozent >= 100:  # weniger als 1 % entnommen – die Packung ist trotzdem offen
+        return float(voll + 1), True, (s["prozent"] if s["offen"] else 99)
+    return float(voll + 1), True, prozent
+
+def _nicht_umrechenbar_text(z, zeilen):
+    """Warum eine Zutat nicht automatisch abgebucht wird – mit Tipp, wenn der Packungsinhalt fehlt."""
+    p0 = zeilen[0]
+    k = einheit_schluessel(z.einheit)
+    basis = "g" if k in _LOEFFEL else (einheit_basis(z.einheit) or ("",))[0]
+    if basis in ("g", "ml") and not ist_masseinheit(p0.einheit) and not (p0.inhalt and p0.inhalt > 0):
+        return f"bei „{p0.name.strip()}“ fehlt „Inhalt pro {p0.einheit or 'Stück'}“"
+    return f"{z.einheit or 'Stück'} ↔ {p0.einheit or 'Stück'} nicht umrechenbar"
+
+def koch_abbuchung(rezept, faktor=1.0, ohne=frozenset()):
+    """Plant „🍳 Gekocht“: was wird aus dem Vorrat abgebucht? Grundlage ist rezept_abgleich() –
+    dieselbe Produktzuordnung und Einheiten-Umrechnung wie auf der Rezeptseite. Schreibt nichts.
+    ohne = IDs der Rezept-Zutaten, die in der Vorschau abgewählt wurden.
+    Liefert {posten, aenderungen, einkauf}:
+      posten: je Zutat ein dict (nur einfache Werte) mit status
+              abbuchen | teilweise | fehlt | pruefen | klein | ignoriert | abgewaehlt
+      aenderungen: {produkt_id: (menge, angebrochen, prozent)} – neuer Stand
+      einkauf: [(Name, Menge, Einheit)] für Fehlendes und den Rest bei „zu wenig“
+    Reihenfolge je Produkt: erst die angebrochene Packung, dann frühestes MHD."""
+    produkte = Produkt.query.all()
+    anbruch = anbruch_prozente()
+    stand = {}  # Arbeitsstand je Produktzeile – mehrere Zutaten können dasselbe Produkt brauchen
+
+    def zeile(p):
+        if p.id not in stand:
+            stand[p.id] = {"menge": max(0.0, float(p.menge or 0)), "offen": p.id in anbruch,
+                           "prozent": anbruch.get(p.id, 100.0)}
+        return stand[p.id]
+
+    def rang(p):
+        return (p.id not in anbruch, p.mhd is None, p.mhd or date.max, p.id)
+
+    posten, fehl, fehl_zeilen, leer_gruppen, einkauf = [], {}, {}, {}, []
+    for a in rezept_abgleich(rezept, faktor, produkte=produkte):
+        z, zeilen, schl, name = a["zutat"], a["zeilen"], a["schl"], a["produkt_name"]
+        gk = _norm_text(name)
+        e = {"id": z.id, "name": z.name, "produkt": name, "produkt_id": a["produkt_id"], "orte": [],
+             "menge_text": f"{zahl_de(max(0.0, float(z.menge or 0)) * faktor, 2)} {z.einheit or ''}".strip(),
+             "status": "", "text": "", "genommen_text": "", "fehl_text": "", "noch_text": "", "loeffel_text": ""}
+        posten.append(e)
+        if a["art"] in ("ignoriert", "immer"):
+            e.update(status="ignoriert", text=a["text"])
+            continue
+        if not zeilen:
+            e.update(status="fehlt", text=a["text"])
+            einkauf.append(a["einkauf"])
+            continue
+        if a["art"] == "unsicher":
+            e.update(status="fehlt", text=f"nur ähnlich: {name}? – mit 🔗 zuordnen")
+            einkauf.append(a["einkauf"])
+            continue
+        nutzbar = [(p, g) for p, g in ((p, _einheit_groesse(p, schl)) for p in zeilen) if g]
+        if a["klein"] or not nutzbar or a["bedarf"] <= 1e-9:
+            if a["status"] == "fehlt":  # nichts mehr da
+                e.update(status="fehlt", text=f"{name}: aufgebraucht")
+                leer_gruppen.setdefault(gk, zeilen)
+            elif a["bedarf"] <= 1e-9 or (a["klein"] and einheit_schluessel(z.einheit) not in _LOEFFEL):
+                e.update(status="klein", text="kleine Menge – nicht abgebucht")
+            else:
+                e.update(status="pruefen", text=_nicht_umrechenbar_text(z, zeilen))
+            continue
+        if z.id in ohne:
+            e.update(status="abgewaehlt", text="abgewählt – nicht abgebucht")
+            continue
+        if einheit_schluessel(z.einheit) in _LOEFFEL:
+            e["loeffel_text"] = "≈ " + basis_text(a["bedarf"], schl)
+        rest = a["bedarf"]
+        for p, groesse in sorted(nutzbar, key=lambda pg: rang(pg[0])):
+            if rest <= 1e-9:
+                break
+            s = zeile(p)
+            einheiten = _zeile_einheiten(s)
+            if einheiten * groesse <= 1e-9:
+                continue
+            nimm = min(einheiten * groesse, rest)
+            s["menge"], s["offen"], s["prozent"] = _zeile_neu(s, einheiten - nimm / groesse,
+                                                              ist_masseinheit(p.einheit))
+            rest -= nimm
+            if p.lagerort and p.lagerort not in e["orte"]:
+                e["orte"].append(p.lagerort)
+        label = _einheit_label(zeilen, schl)
+        genommen = a["bedarf"] - rest
+        e["genommen_text"] = basis_text(genommen, schl, label)
+        e["_rest"] = (zeilen, schl, label)
+        if rest <= 1e-6:
+            e["status"] = "abbuchen"
+            continue
+        e["fehl_text"] = basis_text(rest, schl, label)
+        e["status"] = "teilweise" if genommen > 1e-9 else "fehlt"
+        if e["status"] == "fehlt":
+            e["text"] = f"{name}: aufgebraucht"
+        fehl[(gk, schl)] = fehl.get((gk, schl), 0.0) + rest
+        fehl_zeilen[gk] = zeilen
+
+    # Was danach noch da ist (nach allen Zutaten, die dasselbe Produkt brauchen)
+    for e in posten:
+        zeilen, schl, label = e.pop("_rest", (None, None, None))
+        if not zeilen:
+            continue
+        if schl in ("g", "ml", "stück"):
+            gesamt = sum(_zeile_einheiten(zeile(p)) * (_einheit_groesse(p, schl) or 0) for p in zeilen)
+            e["noch_text"] = "noch " + basis_text(gesamt, schl, label)
+        else:  # Behälter: ganze Packungen + angebrochene zeigen
+            voll, offen = 0.0, []
+            for p in zeilen:
+                if (einheit_schluessel(p.einheit) or "stück") != schl:
+                    continue
+                s = zeile(p)
+                if s["offen"] and s["menge"] >= 1:
+                    voll += s["menge"] - 1
+                    offen.append(s["prozent"])
+                else:
+                    voll += s["menge"]
+            e["noch_text"] = f"noch {zahl_de(voll, 2)} {label or schl}"
+            if len(offen) == 1:
+                e["noch_text"] += f" + 1 angebrochene ({int(round(offen[0]))} %)"
+            elif offen:
+                e["noch_text"] += f" + {len(offen)} angebrochene"
+
+    # Einkauf: Fehlmenge in Produkt-Einheit (Packungen aufgerundet), sonst 1 Einheit
+    for (gk, schl), menge in fehl.items():
+        p0 = fehl_zeilen[gk][0]
+        einkauf.append(_einkauf_menge(fehl_zeilen[gk], schl, menge)
+                       or (p0.name.strip(), 1, p0.einheit or "Stück"))
+    for gk, zeilen in leer_gruppen.items():
+        if gk not in fehl_zeilen:
+            einkauf.append((zeilen[0].name.strip(), 1, zeilen[0].einheit or "Stück"))
+
+    aenderungen = {}
+    for p in produkte:
+        s = stand.get(p.id)
+        if not s:
+            continue
+        neu = (s["menge"], 1 if s["offen"] else 0, int(round(s["prozent"])))
+        alt = (max(0.0, float(p.menge or 0)), 1 if p.id in anbruch else 0, int(round(anbruch.get(p.id, 100.0))))
+        if neu != alt:
+            aenderungen[p.id] = neu
+    return {"posten": posten, "aenderungen": aenderungen, "einkauf": posten_zusammenfassen(einkauf)}
+
+def koch_abbuchung_speichern(rezept, plan):
+    """Schreibt die geplanten Bestände und zählt das Rezept als gekocht (ein Commit).
+    Liefert die Daten fürs Rückgängigmachen: {produkte: {id: (vorher, nachher)}, rezept: (vorher, nachher)}."""
+    produkte = {}
+    for pid, nachher in plan["aenderungen"].items():
+        row = db.session.execute(db.text(
+            "SELECT menge, angebrochen, angebrochen_prozent FROM produkt WHERE id=:id"), {"id": pid}).fetchone()
+        if not row:
+            continue
+        vorher = (float(row[0] or 0), int(row[1] or 0), row[2])
+        db.session.execute(db.text(
+            "UPDATE produkt SET menge=:m, angebrochen=:a, angebrochen_prozent=:p WHERE id=:id"),
+            {"m": nachher[0], "a": nachher[1], "p": nachher[2], "id": pid})
+        produkte[pid] = (vorher, nachher)
+    r_vorher = (rezept.zuletzt_gekocht, rezept.koch_zaehler or 0)
+    rezept.zuletzt_gekocht = date.today()
+    rezept.koch_zaehler = (rezept.koch_zaehler or 0) + 1
+    db.session.commit()
+    return {"produkte": produkte, "rezept": (r_vorher, (rezept.zuletzt_gekocht, rezept.koch_zaehler))}
+
+def koch_abbuchung_zuruecknehmen(rezept, undo):
+    """Macht „Gekocht“ rückgängig – aber nur bei Produkten, die seitdem nicht anders geändert
+    wurden (sonst würde eine spätere Änderung überschrieben). Liefert die Zahl übersprungener Produkte."""
+    uebersprungen = 0
+    for pid, (vorher, nachher) in undo["produkte"].items():
+        row = db.session.execute(db.text(
+            "SELECT menge, angebrochen, angebrochen_prozent FROM produkt WHERE id=:id"), {"id": pid}).fetchone()
+        if (not row or abs(float(row[0] or 0) - nachher[0]) > 1e-6 or int(row[1] or 0) != nachher[1]
+                or (nachher[1] and row[2] != nachher[2])):
+            uebersprungen += 1
+            continue
+        db.session.execute(db.text(
+            "UPDATE produkt SET menge=:m, angebrochen=:a, angebrochen_prozent=:p WHERE id=:id"),
+            {"m": vorher[0], "a": vorher[1], "p": vorher[2], "id": pid})
+    r_vorher, r_nachher = undo["rezept"]
+    if (rezept.zuletzt_gekocht, rezept.koch_zaehler or 0) == r_nachher:
+        rezept.zuletzt_gekocht, rezept.koch_zaehler = r_vorher
+    db.session.commit()
+    return uebersprungen
+
+# Ergebnisse von „Gekocht“ für die Anzeige danach (Einkauf, Rückgängig) – nur im Speicher;
+# nach einem Neustart der App ist die Ergebnis-Karte weg, der Vorrat bleibt natürlich gebucht.
+_KOCH_ERGEBNISSE = {}
+_KOCH_LOCK = threading.Lock()
+
+def koch_ergebnis_merken(daten):
+    token = secrets.token_urlsafe(9)
+    with _KOCH_LOCK:
+        _KOCH_ERGEBNISSE[token] = daten
+        while len(_KOCH_ERGEBNISSE) > 30:
+            _KOCH_ERGEBNISSE.pop(next(iter(_KOCH_ERGEBNISSE)))
+    return token
+
+def koch_ergebnis(token, rezept_id, entnehmen=False):
+    with _KOCH_LOCK:
+        erg = _KOCH_ERGEBNISSE.get(token or "")
+        if not erg or erg["rezept_id"] != rezept_id:
+            return None
+        if entnehmen:
+            _KOCH_ERGEBNISSE.pop(token, None)
+        return erg
 
 # ── Routen: Übersicht ──────────────────────────────────────────────────────────
 
@@ -1931,6 +2223,9 @@ def rezepte():
         alle = sorted(alle, key=lambda r: r.name.lower())
     elif sort == "kategorie":
         alle = sorted(alle, key=lambda r: (r.kategorie.lower(), r.name.lower()))
+    elif sort == "gekocht":  # zuletzt gekochte zuerst, nie gekochte ans Ende
+        alle = sorted(alle, key=lambda r: (r.zuletzt_gekocht is None,
+                                           -(r.zuletzt_gekocht or date.min).toordinal(), r.name.lower()))
     else:  # neueste
         alle = sorted(alle, key=lambda r: r.erstellt, reverse=True)
 
@@ -1985,10 +2280,17 @@ def rezept_detail(id):
     abgleich = rezept_abgleich(r, produkte=produkte)
     produkt_namen = sorted({(p.name or "").strip() for p in produkte if (p.name or "").strip()},
                            key=lambda n: n.lower())
+    # „🍳 Gekocht“: Ergebnis der letzten Abbuchung; ?kochen=<Personen> (Essensplaner) öffnet den Dialog
+    gekocht_token = request.args.get("gekocht", "")
+    gekocht = koch_ergebnis(gekocht_token, r.id)
+    kochen = request.args.get("kochen")
+    koch_woche = request.args.get("woche", type=int) if request.args.get("von") == "essensplan" else None
     return render_template("rezept_detail.html", rezept=r, abgleich=abgleich,
         produkt_namen=produkt_namen,
         einkauf_count=einkauf_count, listen=listen,
-        mahlzeiten=MAHLZEITEN, heute=date.today())
+        mahlzeiten=MAHLZEITEN, heute=date.today(),
+        gekocht=gekocht, gekocht_token=gekocht_token,
+        koch_auto=bool(kochen), koch_portionen=koch_portionen(kochen, r)[0], koch_woche=koch_woche)
 
 @app.route("/rezept/<int:id>/bearbeiten", methods=["GET", "POST"])
 def rezept_bearbeiten(id):
@@ -2027,36 +2329,35 @@ def rezept_loeschen(id):
     flash(f"Rezept \'{name}\' wurde gelöscht.", "info")
     return redirect(url_for("rezepte"))
 
-def rezept_zur_liste(rezept, liste_id=None, faktor=1.0):
-    """Fügt fehlende (nach faktor skalierte) Zutaten eines Rezepts zu einer Liste hinzu.
-    Gibt (anzahl_hinzugefügt, liste) zurück."""
-    if liste_id:
-        liste = EinkaufsListe.query.get(int(liste_id))
-    else:
+def posten_zur_liste(posten, liste_id=None):
+    """Schreibt (Name, Menge, Einheit)-Posten auf eine Einkaufsliste (ohne liste_id: die älteste,
+    notfalls neue Liste „Einkauf“). Gleiche Posten werden zusammengefasst, schon offene Einträge
+    gleichen Namens übersprungen. Gibt (anzahl_hinzugefügt, liste) zurück – ohne Commit."""
+    try:
+        liste = EinkaufsListe.query.get(int(liste_id)) if liste_id else None
+    except (TypeError, ValueError):
+        liste = None
+    if not liste and not liste_id:
         liste = EinkaufsListe.query.order_by(EinkaufsListe.erstellt).first()
     if not liste:
         liste = EinkaufsListe(name="Einkauf")
         db.session.add(liste)
         db.session.flush()
-    # Fehlmengen aus dem Abgleich: bekannte Produkte in ihrer Einheit (ganze Packungen),
-    # unbekannte Zutaten mit der Rezeptmenge; gleiche Posten zusammengefasst
-    posten = {}
-    for a in rezept_abgleich(rezept, faktor):
-        if not a["einkauf"]:
-            continue
-        name, menge, einheit = a["einkauf"]
-        k = (name.lower(), (einheit or "").lower())
-        if k in posten:
-            posten[k][1] = round(posten[k][1] + menge, 2)
-        else:
-            posten[k] = [name, menge, einheit]
     hinzugefuegt = 0
-    for name, menge, einheit in posten.values():
+    for name, menge, einheit in posten_zusammenfassen(posten):
         existiert = Einkaufsliste.query.filter_by(liste_id=liste.id, name=name, erledigt=False).first()
         if not existiert:
             db.session.add(Einkaufsliste(liste_id=liste.id, name=name, menge=menge, einheit=einheit))
             hinzugefuegt += 1
     return hinzugefuegt, liste
+
+def rezept_zur_liste(rezept, liste_id=None, faktor=1.0):
+    """Fügt fehlende (nach faktor skalierte) Zutaten eines Rezepts zu einer Liste hinzu.
+    Gibt (anzahl_hinzugefügt, liste) zurück."""
+    # Fehlmengen aus dem Abgleich: bekannte Produkte in ihrer Einheit (ganze Packungen),
+    # unbekannte Zutaten mit der Rezeptmenge
+    return posten_zur_liste([a["einkauf"] for a in rezept_abgleich(rezept, faktor) if a["einkauf"]],
+                            liste_id)
 
 @app.route("/rezept/<int:id>/einkaufen", methods=["POST"])
 def rezept_einkaufen(id):
@@ -2065,6 +2366,77 @@ def rezept_einkaufen(id):
     db.session.commit()
     flash(f"{hinzugefuegt} fehlende Zutaten zur Liste '{liste.name}' hinzugefügt.", "success")
     return redirect(url_for("rezept_detail", id=id))
+
+def koch_portionen(wert, rezept):
+    """Portionen aus Formular/URL (1–999, sonst die des Rezepts) → (portionen, faktor)."""
+    basis = rezept.portionen or 1
+    try:
+        portionen = int(wert)
+    except (TypeError, ValueError):
+        portionen = basis
+    if not 1 <= portionen <= 999:
+        portionen = basis
+    return portionen, portionen / basis
+
+@app.route("/rezept/<int:id>/gekocht/vorschau")
+def rezept_gekocht_vorschau(id):
+    """Vorschau für den „🍳 Gekocht“-Dialog (HTML-Ausschnitt, wird per fetch geladen)."""
+    r = Rezept.query.get_or_404(id)
+    portionen, faktor = koch_portionen(request.args.get("portionen"), r)
+    return render_template("_gekocht_vorschau.html", plan=koch_abbuchung(r, faktor), portionen=portionen)
+
+@app.route("/rezept/<int:id>/gekocht", methods=["POST"])
+def rezept_gekocht(id):
+    """„🍳 Gekocht“: Zutaten aus dem Vorrat abbuchen, Zähler und Datum setzen.
+    Das Ergebnis (Fehlendes, Rückgängig) zeigt danach die Rezeptseite."""
+    r = Rezept.query.get_or_404(id)
+    portionen, faktor = koch_portionen(request.form.get("portionen"), r)
+    # In der Vorschau angebotene, aber abgewählte Zutaten nicht abbuchen
+    ids = lambda name: {int(x) for x in request.form.getlist(name) if x.isdigit()}
+    plan = koch_abbuchung(r, faktor, ohne=ids("angeboten") - ids("zutat"))
+    undo = koch_abbuchung_speichern(r, plan)
+    woche = request.form.get("woche", type=int) if request.form.get("von") == "essensplan" else None
+    token = koch_ergebnis_merken({"rezept_id": r.id, "portionen": portionen, "posten": plan["posten"],
+                                  "einkauf": plan["einkauf"], "undo": undo, "liste": "", "woche": woche})
+    return redirect(url_for("rezept_detail", id=r.id, gekocht=token))
+
+@app.route("/rezept/<int:id>/gekocht/einkaufen", methods=["POST"])
+def rezept_gekocht_einkaufen(id):
+    """Nach „Gekocht“: ausgewählte fehlende Zutaten (und Reste) auf eine Einkaufsliste setzen."""
+    r = Rezept.query.get_or_404(id)
+    token = request.form.get("token", "")
+    erg = koch_ergebnis(token, r.id)
+    if not erg:
+        flash("Das Koch-Ergebnis ist nicht mehr verfügbar – bitte „Fehlende Zutaten hinzufügen“ nutzen.", "warning")
+        return redirect(url_for("rezept_detail", id=r.id))
+    gewaehlt = {int(x) for x in request.form.getlist("posten") if x.isdigit()}
+    posten = [p for i, p in enumerate(erg["einkauf"]) if i in gewaehlt]
+    if not posten:
+        flash("Keine Zutat ausgewählt.", "info")
+        return redirect(url_for("rezept_detail", id=r.id, gekocht=token))
+    anzahl, liste = posten_zur_liste(posten, request.form.get("liste_id"))
+    db.session.commit()
+    erg["liste"] = liste.name
+    flash(f"{anzahl} Zutaten zur Liste '{liste.name}' hinzugefügt.", "success")
+    return redirect(url_for("rezept_detail", id=r.id, gekocht=token))
+
+@app.route("/rezept/<int:id>/gekocht/rueckgaengig", methods=["POST"])
+def rezept_gekocht_rueckgaengig(id):
+    """Letztes „Gekocht“ zurücknehmen: Bestände, Zähler und Datum wie vorher."""
+    r = Rezept.query.get_or_404(id)
+    erg = koch_ergebnis(request.form.get("token", ""), r.id, entnehmen=True)
+    if not erg:
+        flash("Rückgängig ist nicht mehr möglich.", "warning")
+        return redirect(url_for("rezept_detail", id=r.id))
+    uebersprungen = koch_abbuchung_zuruecknehmen(r, erg["undo"])
+    if uebersprungen:
+        flash(f"Abbuchung zurückgenommen – {uebersprungen} Produkt(e) wurden inzwischen geändert "
+              "und blieben unverändert.", "warning")
+    else:
+        flash("Abbuchung zurückgenommen – der Vorrat ist wie vorher.", "success")
+    if erg.get("liste"):
+        flash(f"Hinweis: die Einträge auf der Einkaufsliste '{erg['liste']}' bleiben stehen.", "info")
+    return redirect(url_for("rezept_detail", id=r.id))
 
 @app.route("/zutat/zuordnen", methods=["POST"])
 def zutat_zuordnen():
@@ -3908,6 +4280,10 @@ def db_migrieren():
         for _rz_spalte in ("vorbereitungszeit", "kochzeit", "gesamtzeit"):
             if tabelle_existiert("rezept") and not spalte_existiert("rezept", _rz_spalte):
                 cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} INTEGER")
+                conn.commit()
+        for _rz_spalte, _rz_typ in (("zuletzt_gekocht", "DATE"), ("koch_zaehler", "INTEGER DEFAULT 0")):
+            if tabelle_existiert("rezept") and not spalte_existiert("rezept", _rz_spalte):
+                cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} {_rz_typ}")
                 conn.commit()
 
         # essensplan

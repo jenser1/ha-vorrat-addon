@@ -1,0 +1,46 @@
+{# Vorschau im „🍳 Gekocht“-Dialog – per fetch geladen (rezept_gekocht_vorschau → koch_abbuchung).
+   Abgewählte Zutaten: angeboten − zutat (Checkboxen), siehe rezept_gekocht. #}
+{% set buchbar = plan.posten | selectattr("status", "in", ["abbuchen", "teilweise"]) | list %}
+{% set fehlt = plan.posten | selectattr("status", "equalto", "fehlt") | list %}
+{% set pruefen = plan.posten | selectattr("status", "equalto", "pruefen") | list %}
+{% set nicht = plan.posten | selectattr("status", "in", ["klein", "ignoriert"]) | list %}
+
+{% if buchbar %}
+  <div class="gk-titel">Wird abgebucht</div>
+  {% for e in buchbar %}
+  <label class="gk-zeile gk-wahl">
+    <input type="checkbox" name="zutat" value="{{ e.id }}" checked>
+    <input type="hidden" name="angeboten" value="{{ e.id }}">
+    <span class="gk-inhalt">
+      <b>{{ e.menge_text }} {{ e.name }}</b>{% if e.loeffel_text %} <span class="gk-klein">({{ e.loeffel_text }})</span>{% endif %}
+      <span class="gk-klein gk-block">← {{ e.produkt }}{% if e.orte %} ({{ e.orte|join(', ') }}){% endif %}
+        {%- if e.status == 'teilweise' %} · <span class="gk-warn">nur {{ e.genommen_text }} da</span>{% endif %}</span>
+    </span>
+  </label>
+  {% endfor %}
+{% else %}
+  <p class="gk-klein" style="margin:4px 0 10px;">Nichts im Vorrat zum Abbuchen – es wird nur „gekocht“ gezählt.</p>
+{% endif %}
+
+{% if fehlt %}
+  <div class="gk-titel">🛒 Fehlt – wird nicht abgebucht</div>
+  {% for e in fehlt %}
+  <div class="gk-zeile"><span class="gk-inhalt">{{ e.menge_text }} {{ e.name }} <span class="gk-klein">– {{ e.text }}</span></span></div>
+  {% endfor %}
+{% endif %}
+
+{% if pruefen %}
+  <div class="gk-titel">🔍 Manuell prüfen – wird nicht abgebucht</div>
+  {% for e in pruefen %}
+  <div class="gk-zeile"><span class="gk-inhalt">{{ e.menge_text }} {{ e.name }} <span class="gk-klein">– {{ e.text }}</span></span></div>
+  {% endfor %}
+{% endif %}
+
+{% if nicht %}
+  <p class="gk-klein" style="margin:8px 0 0;">➖ Nicht abgebucht:
+    {% for e in nicht %}{{ e.name }}{% if e.status == 'klein' %} ({{ e.menge_text }}){% endif %}{{ ', ' if not loop.last }}{% endfor %}</p>
+{% endif %}
+
+{% if fehlt or buchbar | selectattr("status", "equalto", "teilweise") | list %}
+  <p class="gk-klein" style="margin:10px 0 0;">Fehlendes kannst du nach dem Abbuchen auf die Einkaufsliste setzen.</p>
+{% endif %}

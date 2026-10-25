@@ -68,6 +68,12 @@
               {% if eintrag.rezept %}🍽️ {{ eintrag.rezept.name }}{% else %}📝 {{ eintrag.freitext }}{% endif %}
               {% if eintrag.personen %}<span style="color:var(--muted); font-size:0.72rem;">· {{ eintrag.personen }}👤</span>{% endif %}
             </span>
+            {% if eintrag.rezept %}
+            <a href="{{ url_for('rezept_detail', id=eintrag.rezept_id, kochen=eintrag.personen or eintrag.rezept.portionen, von='essensplan', woche=woche) }}"
+               onclick="event.stopPropagation();" title="Gekocht – Zutaten aus dem Vorrat abbuchen"
+               aria-label="{{ eintrag.rezept.name }} gekocht – Zutaten abbuchen"
+               style="text-decoration:none; font-size:0.9rem; padding:0 2px;">🍳</a>
+            {% endif %}
             <form method="post" action="{{ url_for('essensplan_loeschen', id=eintrag.id) }}"
                   onclick="event.stopPropagation();" style="display:inline;">
               <input type="hidden" name="woche" value="{{ woche }}">

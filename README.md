@@ -13,6 +13,10 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 
 > 🤖 **Mit KI erstellt:** Diese App wurde mit künstlicher Intelligenz (Anthropic Claude) über **[Claude Code](https://claude.com/claude-code)** entwickelt.
 
+## 🎬 Kurz gezeigt
+
+https://github.com/user-attachments/assets/2beb3bbe-1006-4bad-8492-f8aa60174484
+
 ---
 
 ## ✨ Features
@@ -45,6 +49,7 @@ Vollständige Haushalts-Vorratsverwaltung direkt in Home Assistant – mit Rezep
 - **📋 Text-Import**: Rezept aus freiem Text einfügen (Instagram-/Facebook-Bildunterschrift, WhatsApp, Koch-App) – wird automatisch in Zutaten & Schritte zerlegt, editierbare Vorschau
 - **👨‍🍳 Kochmodus**: Vollbild-Ansicht Schritt für Schritt beim Kochen – große Schrift, Fortschrittsbalken, einblendbare Zutaten, Bildschirm bleibt an (Wake Lock)
 - **⏱️ Zeitangaben**: Vorbereitungs-, Koch-/Back- und Gesamtzeit – beim Web-/Text-Import automatisch übernommen, auf der Rezeptseite und im Kochmodus angezeigt
+- **🗓️ Saison & Anlass**: Jahreszeiten, Feste (Ostern, Weihnachten, Silvester, …) und eigene Anlässe am Rezept anhaken – als Schildchen auf Rezeptkarte und Rezeptseite
 - Filter und Sortierung nach Kategorie
 
 ### ⏲️ Küchen-Timer
@@ -245,7 +250,24 @@ Hier stehen die **aktuelle und die vorherige Version**. Alle älteren Versionen 
 Version schon fertig ist – stehen in der **[CHANGELOG.md](CHANGELOG.md)**.
 Home Assistant zeigt beim Update der App automatisch die neuen Einträge an.
 
-### 1.8.1 – aktuelle Version
+### 1.8.2 – aktuelle Version
+
+#### 🗓️ Rezepte nach Saison & Anlass
+- Im Rezept-Formular lassen sich jetzt **Jahreszeiten und Anlässe** anhaken – mehrere auf einmal: 🌷 Frühling, ☀️ Sommer, 🍂 Herbst, ❄️ Winter, 🐣 Ostern, 🎄 Weihnachten, 🎆 Silvester, 🎭 Fasching, 🎃 Halloween, 🍖 Grillen, 🎂 Geburtstag
+- **Eigene Anlässe** einfach dazuschreiben (z. B. „Party“, mehrere mit Komma). Einmal benutzt, stehen sie bei allen Rezepten zur Auswahl
+- Die Anlässe erscheinen als Schildchen auf den **Rezeptkarten** und auf der **Rezeptseite**
+
+#### 🐛 Fehlerbehebungen
+- **Kästchen zum Anhaken zeigen wieder einen Haken** – z. B. „🛒 Fehlende Zutaten zur Einkaufsliste“ im Essensplaner und „Bild entfernen“ auf der Produktseite. Auch im Dunkel-Modus, in der gewählten Farbe
+- Rezeptseite, **„Fehlende Zutaten hinzufügen“**: Die Auswahl „➕ Neue Liste „Einkauf“ erstellen“ hat in Wirklichkeit auf die älteste vorhandene Liste geschrieben. Jetzt stehen dort nur deine Listen (die neueste ist vorausgewählt) – wie nach „🍳 Gekocht“. „➕ Neue Liste „Einkauf““ erscheint nur noch, wenn es noch gar keine Liste gibt
+- Essensplaner ohne Einkaufsliste: Der Hinweis sagt jetzt richtig, dass beim Speichern automatisch die Liste „Einkauf“ angelegt wird
+
+#### 📱 Kleinigkeiten
+- README: Ein **🎬 kurzes Video** zeigt die App in 30 Sekunden
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Spalte für Saison & Anlass) – vorhandene Rezepte bleiben unverändert.
+
+### 1.8.1 – vorherige Version
 
 #### 🍳 „Gekocht“ – Zutaten aus dem Vorrat abbuchen
 - Neuer Knopf **„🍳 Gekocht“** auf der Rezeptseite: Ein Dialog fragt die Portionen ab und zeigt vorab, was aus welchem Produkt abgebucht wird. Einzelne Zutaten lassen sich abwählen (z. B. wenn du ein anderes Öl genommen hast)
@@ -273,35 +295,3 @@ Home Assistant zeigt beim Update der App automatisch die neuen Einträge an.
 
 💾 Die Datenbank wird beim Start automatisch ergänzt (Koch-Zähler und „zuletzt gekocht“) – vorhandene Daten bleiben unverändert.
 
-### 1.8.0 – vorherige Version
-
-#### ⚖️ Packungsinhalt
-- Neues Feld **„Inhalt pro Packung/Dose/Stück"** (z. B. 500 g, 1 l) – freiwillig
-- Übersicht zeigt z. B. **„3 Packung · à 500 g · 1,5 kg"**, bei angebrochenen Packungen zusätzlich **„1 offen: noch 700 g"**
-- Der „Angebrochen"-Regler zeigt den Rest auch in Gramm bzw. ml
-- Open Food Facts trägt den Packungsinhalt automatisch ein und zeigt die Packungsgröße schon in den Suchtreffern
-
-#### 🍳 Rezept-Abgleich mit echten Mengen
-- Rechnet g ↔ kg, ml ↔ l und Packungen (über den Packungsinhalt) um und zählt alle Lagerorte eines Produkts zusammen
-- Erkennt Schreibweisen: Zwiebel/Zwiebeln, Hackfleisch/Gehacktes, „Mehl (Type 405)", Weizenmehl → Mehl
-- Status je Zutat: ✅ genug da · ⚠️ zu wenig · 🛒 fehlt · ❓ unsicher (nur ähnlicher Name, z. B. Kokosmilch ↔ Milch) · ➖ nicht geprüft (z. B. Leitungswasser)
-- **🔗 Zuordnung merken**: eine Zutat einmal einem Vorratsprodukt zuordnen – gilt dann für alle Rezepte (oder „nicht prüfen")
-- Braucht ein Rezept dasselbe Produkt mehrmals (z. B. Butter für Teig und Füllung), wird der Bedarf zusammengezählt
-- „Fehlende Zutaten hinzufügen" – auch im Essensplaner – schreibt die echte Fehlmenge auf die Einkaufsliste, bei Packungsware als ganze Packungen
-- „Verwendet in Rezepten" auf der Produktseite nutzt denselben Abgleich
-
-#### ✏️ Bearbeiten an einem Platz
-- Klick auf den Produktnamen öffnet die Produktseite – dort stehen **alle Angaben in einem Formular** (Name, Menge, Inhalt, Lagerort, Kategorie, MHD, Gebinde, Einfrieren/Einkochen, Bild, Nährwerte, Notiz) mit einem Speichern-Knopf
-- **„Speichern & zur Übersicht"** springt zurück zur Zeile des Produkts – mit dem vorher gewählten Filter
-- Rückfrage, bevor ungespeicherte Änderungen verloren gehen
-- Der ✏️-Knopf in der Übersicht und die getrennten Formulare (Bild/Nährwerte/Notiz, Tiefkühl-Karte) entfallen
-
-#### 📱 Handy & Kleinigkeiten
-- Rezeptseite auf Handy/Tablet untereinander – die Zutatenliste wird nicht mehr abgeschnitten
-- Kopfleiste der Produktseite am Handy kompakt (nur Symbole)
-- Mengen mit mehreren Nachkommastellen (z. B. 2,75) lassen sich speichern; eine frei eingetragene Herkunft bleibt beim Speichern erhalten
-- README: Nutzung über die **Home-Assistant-App** genau beschrieben, Menüpfade für Home Assistant 2026.2 („Apps" statt „Add-ons") aktualisiert
-- Neu: die **CHANGELOG.md** – Home Assistant zeigt sie beim Update an
-- Security-Policy auf 1.8.x aktualisiert
-
-💾 Die Datenbank wird beim Start automatisch ergänzt (Packungsinhalt und Zutaten-Zuordnungen) – vorhandene Daten bleiben unverändert.

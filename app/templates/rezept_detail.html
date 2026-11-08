@@ -33,9 +33,7 @@
   .gk-zeile{ display:flex; align-items:flex-start; gap:10px; padding:7px 10px; border-radius:9px;
              background:var(--bg); margin-bottom:5px; font-size:0.88rem; line-height:1.35; }
   .gk-wahl{ cursor:pointer; }
-  /* base.html setzt appearance:none für alle inputs → Checkbox wieder normal darstellen */
-  .gk-wahl input[type="checkbox"]{ -webkit-appearance:checkbox; appearance:auto; width:20px; height:20px;
-                                   padding:0; margin:1px 0 0; flex:none; accent-color:var(--primary); }
+  .gk-wahl input[type="checkbox"]{ width:20px; height:20px; margin:1px 0 0; flex:none; }
   .gk-inhalt{ flex:1; min-width:0; }
   .gk-klein{ font-size:0.78rem; color:var(--muted); }
   .gk-block{ display:block; }
@@ -162,6 +160,11 @@
           {%- if rezept.zuletzt_gekocht %} · zuletzt {{ rezept.zuletzt_gekocht|seit }}{% endif %}</span>
         {% endif %}
       </div>
+      {% if rezept.anlass_liste %}
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px;">
+        {% for a in rezept.anlass_liste %}<span class="anlass-tag">{{ a|anlass }}</span>{% endfor %}
+      </div>
+      {% endif %}
     </div>
 
     {% if rezept.anleitung %}
@@ -231,9 +234,10 @@
       <form method="post" action="{{ url_for('rezept_einkaufen', id=rezept.id) }}" style="margin-top: 16px;">
         <select name="liste_id" style="width:100%; margin-bottom:8px; padding:8px 10px;
                 border:1px solid var(--border); border-radius:8px; font-size:0.88rem;">
-          <option value="">➕ Neue Liste "Einkauf" erstellen</option>
           {% for l in listen %}
             <option value="{{ l.id }}">🛒 {{ l.name }}</option>
+          {% else %}
+            <option value="">➕ Neue Liste „Einkauf“</option>
           {% endfor %}
         </select>
         <button type="submit" class="btn btn-primary" style="width: 100%;">

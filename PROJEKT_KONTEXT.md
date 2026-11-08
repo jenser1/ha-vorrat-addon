@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.8.1
+**Aktuelle Version:** 1.8.2
 
 ---
 
@@ -77,7 +77,9 @@ Einkaufsliste: id, liste_id, name, menge, einheit,
 Rezept: id, name, beschreibung, anleitung, portionen,
         kategorie, quell_url, erstellt,
         vorbereitungszeit, kochzeit, gesamtzeit (Minuten, optional; normale ORM-Spalten + ALTER-TABLE-Migration wie quell_url),
-        zuletzt_gekocht (Date), koch_zaehler (Integer, 0) – „🍳 Gekocht“
+        zuletzt_gekocht (Date), koch_zaehler (Integer, 0) – „🍳 Gekocht“,
+        anlaesse (Text, kommagetrennt, z. B. "Herbst,Weihnachten,Party") – Saison & Anlass;
+        feste Auswahl in ANLAESSE, eigene Anlässe ohne Datum; Property anlass_liste, Filter |anlass
 
 RezeptZutat: id, rezept_id, name, menge, einheit
 

@@ -3,6 +3,17 @@
 {% block page_title %}{{ 'Rezept bearbeiten' if rezept else 'Neues Rezept' }}{% endblock %}
 
 {% block content %}
+<style>
+  /* Saison & Anlass: Checkboxen als Chips (Klick auf den Chip hakt an) */
+  .anlass-chips{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .anlass-chip{ position:relative; cursor:pointer; }
+  .anlass-chip input{ position:absolute; opacity:0; width:1px; height:1px; }
+  .form-group .anlass-chip span{ display:inline-block; padding:6px 11px; border-radius:999px; border:1.5px solid var(--border);
+                                 font-size:0.85rem; font-weight:500; color:var(--text); background:var(--input-bg, white);
+                                 user-select:none; }
+  .form-group .anlass-chip input:checked + span{ background:var(--primary); border-color:var(--primary); color:#fff; }
+  .anlass-chip input:focus-visible + span{ box-shadow:0 0 0 3px rgba(59,130,246,0.25); }
+</style>
 <div style="max-width: 800px; margin: 0 auto;">
 <form method="post" id="rezept-form">
 
@@ -48,6 +59,19 @@
         <label>⏰ Gesamt (Min)</label>
         <input type="number" name="gesamtzeit" min="0" step="1"
                value="{{ rezept.gesamtzeit if rezept and rezept.gesamtzeit else '' }}" placeholder="optional">
+      </div>
+      <div class="form-group" style="grid-column: 1 / -1;">
+        <label>🗓️ Saison &amp; Anlass <span style="font-weight:400;">(mehrere möglich)</span></label>
+        {% set gewaehlt = rezept.anlass_liste if rezept else [] %}
+        <div class="anlass-chips">
+          {% for name, symbol in anlaesse %}
+          <label class="anlass-chip"><input type="checkbox" name="anlass" value="{{ name }}" {{ 'checked' if name in gewaehlt }}><span>{{ symbol }} {{ name }}</span></label>
+          {% endfor %}
+          {% for name in eigene_anlaesse %}
+          <label class="anlass-chip"><input type="checkbox" name="anlass" value="{{ name }}" {{ 'checked' if name in gewaehlt }}><span>🏷️ {{ name }}</span></label>
+          {% endfor %}
+        </div>
+        <input type="text" name="anlass_neu" maxlength="120" placeholder="➕ Eigener Anlass, z. B. Party">
       </div>
     </div>
   </div>

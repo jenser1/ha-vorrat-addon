@@ -153,7 +153,13 @@ class Rezept(db.Model):
     erstellt = db.Column(db.DateTime, default=datetime.utcnow)
     zuletzt_gekocht = db.Column(db.Date, nullable=True)  # zuletzt „🍳 Gekocht“ gedrückt
     koch_zaehler = db.Column(db.Integer, default=0)      # wie oft gekocht
+    anlaesse = db.Column(db.Text, default="")            # Saison & Anlass, kommagetrennt, z.B. "Herbst,Weihnachten"
     zutaten = db.relationship("RezeptZutat", backref="rezept", lazy=True, cascade="all, delete-orphan")
+
+    @property
+    def anlass_liste(self):
+        """Markierte Jahreszeiten/Anlässe als Liste."""
+        return [a for a in (self.anlaesse or "").split(",") if a]
 
 class RezeptZutat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -2212,6 +2218,38 @@ def einkauf_preis(id):
 
 EINHEITEN = ['Stück', 'g', 'kg', 'ml', 'l', 'EL', 'TL', 'Prise', 'Packung', 'Dose', 'Tasse']
 
+# Saison & Anlass: feste Auswahl (Reihenfolge = Anzeige), dazu eigene Anlässe ohne Datum (🏷️)
+ANLAESSE = [("Frühling", "🌷"), ("Sommer", "☀️"), ("Herbst", "🍂"), ("Winter", "❄️"),
+            ("Ostern", "🐣"), ("Weihnachten", "🎄"), ("Silvester", "🎆"), ("Fasching", "🎭"),
+            ("Halloween", "🎃"), ("Grillen", "🍖"), ("Geburtstag", "🎂")]
+ANLASS_SYMBOL = dict(ANLAESSE)
+
+@app.template_filter("anlass")
+def anlass_text(name):
+    """'Herbst' → '🍂 Herbst', eigene Anlässe mit 🏷️."""
+    return f"{ANLASS_SYMBOL.get(name, '🏷️')} {name}"
+
+def eigene_anlaesse():
+    """Alle schon benutzten eigenen Anlässe (zur Auswahl im Rezept-Formular)."""
+    namen = {a for (s,) in db.session.query(Rezept.anlaesse) for a in (s or "").split(",")
+             if a and a not in ANLASS_SYMBOL}
+    return sorted(namen, key=str.lower)
+
+def anlaesse_aus_form():
+    """Angehakte Anlässe + eigene (Feld anlass_neu, kommagetrennt) → Speicherwert.
+    Groß/Klein egal (bekannte Schreibweise gewinnt), keine Dubletten, feste in ihrer Reihenfolge zuerst."""
+    bekannt = {a.lower(): a for a in eigene_anlaesse()}
+    bekannt.update({a.lower(): a for a, _ in ANLAESSE})
+    namen = []
+    for n in request.form.getlist("anlass") + request.form.get("anlass_neu", "").split(","):
+        n = " ".join(n.replace(",", " ").split())[:40]
+        n = bekannt.get(n.lower(), n)
+        if n and n.lower() not in {x.lower() for x in namen}:
+            namen.append(n)
+    reihenfolge = [a for a, _ in ANLAESSE]
+    namen.sort(key=lambda n: reihenfolge.index(n) if n in ANLASS_SYMBOL else len(reihenfolge))
+    return ",".join(namen)
+
 @app.route("/rezepte")
 def rezepte():
     alle = Rezept.query.all()
@@ -2253,6 +2291,7 @@ def rezept_neu():
             vorbereitungszeit=form_minuten("vorbereitungszeit"),
             kochzeit=form_minuten("kochzeit"),
             gesamtzeit=form_minuten("gesamtzeit"),
+            anlaesse=anlaesse_aus_form(),
         )
         db.session.add(r)
         db.session.flush()
@@ -2268,7 +2307,8 @@ def rezept_neu():
         db.session.commit()
         flash(f"Rezept \'{r.name}\' wurde gespeichert.", "success")
         return redirect(url_for("rezept_detail", id=r.id))
-    return render_template("rezept_form.html", rezept=None, einheiten=EINHEITEN, einkauf_count=einkauf_count)
+    return render_template("rezept_form.html", rezept=None, einheiten=EINHEITEN, einkauf_count=einkauf_count,
+                           anlaesse=ANLAESSE, eigene_anlaesse=eigene_anlaesse())
 
 @app.route("/rezept/<int:id>")
 def rezept_detail(id):
@@ -2305,6 +2345,7 @@ def rezept_bearbeiten(id):
         r.vorbereitungszeit = form_minuten("vorbereitungszeit")
         r.kochzeit = form_minuten("kochzeit")
         r.gesamtzeit = form_minuten("gesamtzeit")
+        r.anlaesse = anlaesse_aus_form()
         # Zutaten neu setzen
         RezeptZutat.query.filter_by(rezept_id=r.id).delete()
         namen = request.form.getlist("zutat_name")
@@ -2318,7 +2359,8 @@ def rezept_bearbeiten(id):
         db.session.commit()
         flash(f"Rezept \'{r.name}\' wurde aktualisiert.", "success")
         return redirect(url_for("rezept_detail", id=r.id))
-    return render_template("rezept_form.html", rezept=r, einheiten=EINHEITEN, einkauf_count=einkauf_count)
+    return render_template("rezept_form.html", rezept=r, einheiten=EINHEITEN, einkauf_count=einkauf_count,
+                           anlaesse=ANLAESSE, eigene_anlaesse=eigene_anlaesse())
 
 @app.route("/rezept/<int:id>/loeschen", methods=["POST"])
 def rezept_loeschen(id):
@@ -4281,7 +4323,8 @@ def db_migrieren():
             if tabelle_existiert("rezept") and not spalte_existiert("rezept", _rz_spalte):
                 cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} INTEGER")
                 conn.commit()
-        for _rz_spalte, _rz_typ in (("zuletzt_gekocht", "DATE"), ("koch_zaehler", "INTEGER DEFAULT 0")):
+        for _rz_spalte, _rz_typ in (("zuletzt_gekocht", "DATE"), ("koch_zaehler", "INTEGER DEFAULT 0"),
+                                    ("anlaesse", "TEXT DEFAULT ''")):
             if tabelle_existiert("rezept") and not spalte_existiert("rezept", _rz_spalte):
                 cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} {_rz_typ}")
                 conn.commit()

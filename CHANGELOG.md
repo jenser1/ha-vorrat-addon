@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.8.2
+
+### 🗓️ Rezepte nach Saison & Anlass
+- Im Rezept-Formular lassen sich jetzt **Jahreszeiten und Anlässe** anhaken – mehrere auf einmal: 🌷 Frühling, ☀️ Sommer, 🍂 Herbst, ❄️ Winter, 🐣 Ostern, 🎄 Weihnachten, 🎆 Silvester, 🎭 Fasching, 🎃 Halloween, 🍖 Grillen, 🎂 Geburtstag
+- **Eigene Anlässe** einfach dazuschreiben (z. B. „Party“, mehrere mit Komma). Einmal benutzt, stehen sie bei allen Rezepten zur Auswahl
+- Die Anlässe erscheinen als Schildchen auf den **Rezeptkarten** und auf der **Rezeptseite**
+
+### 🐛 Fehlerbehebungen
+- **Kästchen zum Anhaken zeigen wieder einen Haken** – z. B. „🛒 Fehlende Zutaten zur Einkaufsliste“ im Essensplaner und „Bild entfernen“ auf der Produktseite. Auch im Dunkel-Modus, in der gewählten Farbe
+- Rezeptseite, **„Fehlende Zutaten hinzufügen“**: Die Auswahl „➕ Neue Liste „Einkauf“ erstellen“ hat in Wirklichkeit auf die älteste vorhandene Liste geschrieben. Jetzt stehen dort nur deine Listen (die neueste ist vorausgewählt) – wie nach „🍳 Gekocht“. „➕ Neue Liste „Einkauf““ erscheint nur noch, wenn es noch gar keine Liste gibt
+- Essensplaner ohne Einkaufsliste: Der Hinweis sagt jetzt richtig, dass beim Speichern automatisch die Liste „Einkauf“ angelegt wird
+
+### 📱 Kleinigkeiten
+- README: Ein **🎬 kurzes Video** zeigt die App in 30 Sekunden
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Spalte für Saison & Anlass) – vorhandene Rezepte bleiben unverändert.
+
 ## 1.8.1
 
 ### 🍳 „Gekocht“ – Zutaten aus dem Vorrat abbuchen

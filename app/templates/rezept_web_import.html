@@ -97,6 +97,18 @@
           <label>Kurzbeschreibung</label>
           <input type="text" name="beschreibung" value="{{ ergebnis.beschreibung }}">
         </div>
+        {% if ergebnis.bild_url %}
+        <div class="form-group" style="grid-column: 1 / -1;">
+          <label>📷 Foto</label>
+          <label style="display:flex; gap:12px; align-items:center; cursor:pointer; font-size:0.88rem;">
+            <input type="checkbox" name="bild_url" value="{{ ergebnis.bild_url }}" checked>
+            <img src="{{ ergebnis.bild_url }}" alt="" referrerpolicy="no-referrer"
+                 style="width:120px; height:80px; object-fit:cover; border-radius:10px; background:var(--bg); flex:none;"
+                 onerror="this.style.display='none'">
+            <span>Foto der Webseite übernehmen</span>
+          </label>
+        </div>
+        {% endif %}
         <div class="form-group">
           <label>Portionen</label>
           <input type="number" name="portionen" value="{{ ergebnis.portionen }}" min="1">

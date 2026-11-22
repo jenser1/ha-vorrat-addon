@@ -4,7 +4,7 @@
 Home Assistant Add-on für Haushalts-Vorratsverwaltung mit Rezepten, Einkaufslisten und Web-Import.
 
 **GitHub:** https://github.com/jenser1/ha-vorrat-addon
-**Aktuelle Version:** 1.8.2
+**Aktuelle Version:** 1.8.3
 
 ---
 
@@ -80,10 +80,12 @@ Rezept: id, name, beschreibung, anleitung, portionen,
         zuletzt_gekocht (Date), koch_zaehler (Integer, 0) – „🍳 Gekocht“,
         anlaesse (Text, kommagetrennt, z. B. "Herbst,Weihnachten,Party") – Saison & Anlass;
         feste Auswahl in ANLAESSE, eigene Anlässe ohne Datum; Property anlass_liste, Filter |anlass
+        bild (VARCHAR 200, "") – Rezeptfoto rezept_<id>.<ext> in BILDER_DIR (neben den Produktbildern);
+        Property bild_version (mtime, gegen Browser-Cache), Route /rezept/<id>/bild
 
 RezeptZutat: id, rezept_id, name, menge, einheit
 
-Einstellungen: id, sprache, waehrung, theme, farbe, kalender_entity,
+Einstellungen: id, sprache, waehrung, theme (light|dark|ha|glas – THEMES), farbe (FARBEN), kalender_entity,
                timer_notify (notify-Dienst, "" = keiner), timer_text (Vorlage, "" = Standard)
 
 Stammdaten: id, typ (lagerort/kategorie/einheit), name, ist_frost
@@ -183,6 +185,33 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
   Buchung entspricht. `?kochen=<Personen>&von=essensplan&woche=N` öffnet den Dialog (Essensplaner).
 - `Rezept.zuletzt_gekocht` (Date) + `koch_zaehler` (Integer) – ORM-Spalten + ALTER-TABLE-Migration.
 
+### Portionen-Umrechner (Rezeptseite)
+- `?portionen=<n>` (sonst `?kochen=`, sonst die des Rezepts) → `koch_portionen()` → faktor für
+  `rezept_abgleich()`; jeder Eintrag hat `menge` (umgerechnet). Anzeige über Filter `|menge(einheit)`
+  (`menge_anzeige`: g/ml ab 100 ganzzahlig, kg/l mit Komma, sonst Brüche ¼ ⅓ ½ ⅔ ¾).
+- Der Umrechner (− / Zahl / +) holt per fetch die Rezeptseite neu und tauscht `#rz-abgleich` und
+  `#koch-zutaten-inhalt` aus – keine zweite Rechnung im JavaScript. Gekocht-/Essensplan-Dialog und
+  „Fehlende Zutaten hinzufügen“ (verstecktes Feld `portionen`) übernehmen die Zahl.
+- Einkaufsliste: `einkauf_runden()` – Stück/Packung/Dose … ganz aufgerundet, g/ml genau.
+
+### Erscheinungsbild (base.html)
+- `data-theme` bleibt immer light|dark (davon hängen die Dunkel-Regeln ab), `data-skin` = ha|glas.
+- **ha:** Skript direkt nach `<body>` liest per `window.parent.getComputedStyle(document.documentElement)`
+  die HA-Theme-Variablen (Ingress-iframe = gleiche Adresse wie HA) und setzt `--bg`, `--card`,
+  `--primary`, Rundung, `--lovelace-background` … auf `body`; Hell/Dunkel aus der Helligkeit von
+  `--primary-background-color`; MutationObserver übernimmt Theme-Wechsel live. Halbtransparente
+  HA-Karten → `data-glas` (Weichzeichner, feste `--flaeche` für Dialoge/Kochmodus).
+  Außerhalb von HA: Hell/Dunkel nach `prefers-color-scheme`.
+- **glas:** Farbverlauf aus `--primary` (color-mix), Karten rgba + backdrop-filter,
+  Abschnittsüberschriften `.card-header .card-title` in Großbuchstaben mit Linie.
+- Karten nutzen `--card-radius` / `--card-shadow` (Standard 16px / leichter Schatten).
+
+### Rezeptfotos
+- Upload im Rezeptformular (`enctype=multipart`), Web-Import übernimmt schema.org `image` bzw.
+  `og:image` (Haken „Foto der Webseite übernehmen“, Feld `bild_url`) → `rezept_bild_aus_formular()`.
+- Download nur über `bild_herunterladen()` (= `_get_sicher`, 5 MB); Bildtyp per `bild_endung()` an
+  den ersten Bytes (jpg/png/gif/webp), nie am Dateinamen.
+
 ---
 
 ## Features
@@ -254,7 +283,9 @@ Werte werden per direktem SQL gespeichert/geladen (nicht ORM).
 - Quell-URL beim Web-Import gespeichert
 - 4 Sprachen: DE, EN, FR, ES
 - 4 Währungen: €, CHF, £, $
-- Hell/Dunkel-Modus + 6 Farbthemen
+- Erscheinungsbild Hell / Dunkel / Wie Home Assistant (live aus dem HA-Theme) / Glas + 6 Farbthemen
+- Rezeptfotos (Upload, automatisch beim Web-Import)
+- Portionen-Umrechner auf der Rezeptseite
 - PWA-fähig (als App installierbar)
 - Bottom-Navigation (mobil) + Sidebar (Desktop)
 - HA Dashboard-Sensoren (abgelaufen, bald, unter Minimum)

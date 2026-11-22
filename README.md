@@ -44,6 +44,8 @@ https://github.com/user-attachments/assets/2beb3bbe-1006-4bad-8492-f8aa60174484
   - ✅ genug da · ⚠️ zu wenig · 🛒 fehlt · ❓ unsicher (nur ähnlicher Name, z. B. Kokosmilch ↔ Milch) · ➖ nicht geprüft (Leitungswasser)
   - **🔗 Zuordnung merken**: Zutat einmal einem Vorratsprodukt zuordnen – gilt für alle Rezepte (oder „nicht prüfen", z. B. für Wasser)
   - „Fehlende Zutaten hinzufügen" schreibt die echte Fehlmenge auf die Einkaufsliste – bei Packungsware als ganze Packungen
+- **👥 Portionen-Umrechner**: Rezept für 4 Personen, du kochst für 2 oder 10? Portionen mit −/+ einstellen – alle Mengen, der Vorrat-Abgleich, die Einkaufsliste und „🍳 Gekocht" rechnen mit (lesbar als 1½ Eier, ¾ Packung, 188 g)
+- **📷 Rezeptfotos**: eigenes Foto hochladen oder beim Web-Import das Foto der Rezeptseite übernehmen – groß auf der Rezeptkarte und als Titelbild
 - **PDF-Import** mit automatischer Spalten-Erkennung
 - **Web-Import** von Chefkoch, Kaufland, Lidl und hunderten weiteren Seiten
 - **📋 Text-Import**: Rezept aus freiem Text einfügen (Instagram-/Facebook-Bildunterschrift, WhatsApp, Koch-App) – wird automatisch in Zutaten & Schritte zerlegt, editierbare Vorschau
@@ -80,6 +82,10 @@ Automatisch verfügbare HA-Sensoren:
 | `sensor.vorrat_tiefkuehl` | Anzahl eingefrorener Produkte |
 | `sensor.vorrat_eingekocht` | Anzahl eingekochter Produkte |
 | `sensor.vorrat_kochtimer` | Küchen-Timer: `idle` / `läuft` / `fertig` (Attribute: Label, Rezept, Restzeit) |
+
+### 🎨 Erscheinungsbild
+- **☀️ Hell**, **🌙 Dunkel**, **🏠 Wie Home Assistant** (übernimmt live dein HA-Theme samt Hell/Dunkel und Dashboard-Hintergrund) oder **🔮 Glas** (Farbverlauf & durchscheinende Karten)
+- 6 Akzentfarben zur Auswahl
 
 ### 🌍 Mehrsprachig & Mehrere Währungen
 - Sprachen: Deutsch, Englisch, Französisch, Spanisch
@@ -250,7 +256,35 @@ Hier stehen die **aktuelle und die vorherige Version**. Alle älteren Versionen 
 Version schon fertig ist – stehen in der **[CHANGELOG.md](CHANGELOG.md)**.
 Home Assistant zeigt beim Update der App automatisch die neuen Einträge an.
 
-### 1.8.2 – aktuelle Version
+### 1.8.3 – aktuelle Version
+
+#### 👥 Portionen-Umrechner
+- Auf der Rezeptseite steht über den Zutaten jetzt **„👥 Für [−] 4 [+] Portionen“** – einfach auf 2, 3 oder 10 Portionen stellen (oder die Zahl eintippen), alle Mengen werden sofort umgerechnet
+- Gut lesbare Mengen: **188 g** statt 187,5 g, **1½ Eier**, **¾ Packung**, **2¼ EL** – fährt man mit der Maus über eine Menge, steht die Originalmenge daneben
+- Der **Vorrat-Abgleich** rechnet mit: Für 10 Portionen reichen 4 Eier eben nicht mehr (⚠️)
+- **„Fehlende Zutaten hinzufügen“**, **„🍳 Gekocht“**, **„📅 Zum Essensplan“** und die Zutatenliste im **Kochmodus** übernehmen die gewählte Portionenzahl
+- **↺ Original** stellt die Mengen des Rezepts wieder her. Die Portionen bleiben beim Neuladen der Seite erhalten, das Rezept selbst wird nicht verändert
+- Vom Essensplaner aus (🍳) ist der Umrechner gleich auf die geplante Personenzahl gestellt
+
+#### 🎨 Neues Erscheinungsbild
+- In den Einstellungen gibt es zwei neue Erscheinungsbilder:
+  - **🏠 Wie Home Assistant** – die App übernimmt live das Theme, das du in Home Assistant gewählt hast: Farben, Hell/Dunkel, Kartenrundung und sogar den Dashboard-Hintergrund. Wechselst du in HA das Theme, passt sich die App sofort an. Außerhalb von HA richtet sie sich nach Hell/Dunkel des Geräts
+  - **🔮 Glas** – Farbverlauf im Hintergrund, durchscheinende Karten mit Weichzeichner und Überschriften mit Trennlinie, im Stil moderner HA-Dashboards. Funktioniert mit allen 6 Farben
+- Dialoge und der Kochmodus bleiben dabei immer gut lesbar (feste Fläche statt durchscheinend)
+- Die markierte Seite in der Seitenleiste erscheint jetzt in deiner gewählten Farbe
+
+#### 📷 Rezeptfotos
+- Rezepte können ein **Foto** haben: im Rezeptformular hochladen (JPG, PNG, GIF, WebP bis 5 MB), ersetzen oder entfernen
+- Beim **Web-Import** wird das Foto der Rezeptseite gleich mit angeboten („Foto der Webseite übernehmen“)
+- Die Rezeptkarten zeigen das Foto groß statt des Symbols, die Rezeptseite oben als Titelbild
+
+#### 🐛 Fehlerbehebungen
+- Einkaufsliste: Stück, Packungen, Dosen usw. werden auf **ganze** aufgerundet – statt „3,5 Eier“ also 4 (g/kg/ml/l bleiben genau)
+- Einstellungen: Die Kacheln für Sprache und Währung waren im Dunkel-Modus weiß – jetzt in den Farben des Themes
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Spalte für das Rezeptfoto) – vorhandene Rezepte bleiben unverändert.
+
+### 1.8.2 – vorherige Version
 
 #### 🗓️ Rezepte nach Saison & Anlass
 - Im Rezept-Formular lassen sich jetzt **Jahreszeiten und Anlässe** anhaken – mehrere auf einmal: 🌷 Frühling, ☀️ Sommer, 🍂 Herbst, ❄️ Winter, 🐣 Ostern, 🎄 Weihnachten, 🎆 Silvester, 🎭 Fasching, 🎃 Halloween, 🍖 Grillen, 🎂 Geburtstag
@@ -266,32 +300,3 @@ Home Assistant zeigt beim Update der App automatisch die neuen Einträge an.
 - README: Ein **🎬 kurzes Video** zeigt die App in 30 Sekunden
 
 💾 Die Datenbank wird beim Start automatisch ergänzt (Spalte für Saison & Anlass) – vorhandene Rezepte bleiben unverändert.
-
-### 1.8.1 – vorherige Version
-
-#### 🍳 „Gekocht“ – Zutaten aus dem Vorrat abbuchen
-- Neuer Knopf **„🍳 Gekocht“** auf der Rezeptseite: Ein Dialog fragt die Portionen ab und zeigt vorab, was aus welchem Produkt abgebucht wird. Einzelne Zutaten lassen sich abwählen (z. B. wenn du ein anderes Öl genommen hast)
-- Abgebucht wird mit demselben Abgleich wie auf der Rezeptseite (g ↔ kg, ml ↔ l, Packung über den Packungsinhalt, gemerkte 🔗-Zuordnungen)
-- Packungsware bleibt ganz: 250 g aus „3 Packung à 1 kg“ ergibt **2 Packung + 1 angebrochene (75 %)**. Zuerst wird die angebrochene Packung verbraucht, dann die mit dem frühesten MHD
-- Zu wenig da → alles Vorhandene wird abgebucht, der Rest gilt als fehlend
-- Fehlt etwas oder ist es nur ähnlich (❓), wird nichts abgebucht. Danach kannst du die fehlenden Zutaten gezielt **auf die Einkaufsliste setzen** – nichts passiert automatisch
-- Nicht umrechenbare Einheiten (z. B. 400 g ↔ Dose ohne Inhalt) erscheinen unter **„Manuell prüfen“**, mit Tipp zum Packungsinhalt. Prise, Msp. und Leitungswasser werden nie abgebucht
-- **↩️ Rückgängig** direkt in der Ergebniskarte. Produkte, die du inzwischen geändert hast, bleiben dabei unangetastet
-- Am Rezept: **„🍳 3× gekocht · zuletzt vor 5 Tagen“** – auch auf den Rezeptkarten, dazu die neue Sortierung **„Zuletzt gekocht“**
-- Auch am Ende des **Kochmodus** und im **Essensplaner** (🍳 am geplanten Rezept, mit dessen Personenzahl)
-
-#### ⚖️ Löffelmaße
-- **EL/TL** werden jetzt umgerechnet (1 EL ≈ 15 ml bzw. 15 g, 1 TL ≈ 5 ml bzw. 5 g), je nachdem, ob das Produkt in ml oder g geführt wird. „2 EL Öl“ zeigt also z. B. „Öl: 750 ml da“ statt nur „vorhanden“. Gilt für Rezeptseite, Einkaufsliste und Abbuchen
-- „Esslöffel“/„Teelöffel“ werden als EL/TL erkannt
-
-#### 📱 Kleinigkeiten
-- Die Vorratsverwaltung erscheint jetzt auch bei Benutzern **ohne Admin-Rechte** in der Seitenleiste (`panel_admin: false`) – z. B. für die ganze Familie
-- Rezeptseite auf dem Handy: Die Knöpfe oben zeigen nur noch das Symbol, damit die Leiste nicht über den Rand läuft
-- README zeigt die Änderungen der **aktuellen und der vorherigen Version** direkt an, ältere stehen weiter in der CHANGELOG.md
-
-#### 🛠️ Entwicklung
-- Neu: **CLAUDE.md** – Anleitung für die Weiterentwicklung mit Claude Code (Befehle, Testmuster, Architektur, Release-Ablauf)
-- Persönliche Angaben gehören in eine eigene `CLAUDE.local.md`; sie ist per `.gitignore` ausgeschlossen und wird nie hochgeladen
-
-💾 Die Datenbank wird beim Start automatisch ergänzt (Koch-Zähler und „zuletzt gekocht“) – vorhandene Daten bleiben unverändert.
-

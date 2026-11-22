@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.8.3
+
+### 👥 Portionen-Umrechner
+- Auf der Rezeptseite steht über den Zutaten jetzt **„👥 Für [−] 4 [+] Portionen“** – einfach auf 2, 3 oder 10 Portionen stellen (oder die Zahl eintippen), alle Mengen werden sofort umgerechnet
+- Gut lesbare Mengen: **188 g** statt 187,5 g, **1½ Eier**, **¾ Packung**, **2¼ EL** – fährt man mit der Maus über eine Menge, steht die Originalmenge daneben
+- Der **Vorrat-Abgleich** rechnet mit: Für 10 Portionen reichen 4 Eier eben nicht mehr (⚠️)
+- **„Fehlende Zutaten hinzufügen“**, **„🍳 Gekocht“**, **„📅 Zum Essensplan“** und die Zutatenliste im **Kochmodus** übernehmen die gewählte Portionenzahl
+- **↺ Original** stellt die Mengen des Rezepts wieder her. Die Portionen bleiben beim Neuladen der Seite erhalten, das Rezept selbst wird nicht verändert
+- Vom Essensplaner aus (🍳) ist der Umrechner gleich auf die geplante Personenzahl gestellt
+
+### 🎨 Neues Erscheinungsbild
+- In den Einstellungen gibt es zwei neue Erscheinungsbilder:
+  - **🏠 Wie Home Assistant** – die App übernimmt live das Theme, das du in Home Assistant gewählt hast: Farben, Hell/Dunkel, Kartenrundung und sogar den Dashboard-Hintergrund. Wechselst du in HA das Theme, passt sich die App sofort an. Außerhalb von HA richtet sie sich nach Hell/Dunkel des Geräts
+  - **🔮 Glas** – Farbverlauf im Hintergrund, durchscheinende Karten mit Weichzeichner und Überschriften mit Trennlinie, im Stil moderner HA-Dashboards. Funktioniert mit allen 6 Farben
+- Dialoge und der Kochmodus bleiben dabei immer gut lesbar (feste Fläche statt durchscheinend)
+- Die markierte Seite in der Seitenleiste erscheint jetzt in deiner gewählten Farbe
+
+### 📷 Rezeptfotos
+- Rezepte können ein **Foto** haben: im Rezeptformular hochladen (JPG, PNG, GIF, WebP bis 5 MB), ersetzen oder entfernen
+- Beim **Web-Import** wird das Foto der Rezeptseite gleich mit angeboten („Foto der Webseite übernehmen“)
+- Die Rezeptkarten zeigen das Foto groß statt des Symbols, die Rezeptseite oben als Titelbild
+
+### 🐛 Fehlerbehebungen
+- Einkaufsliste: Stück, Packungen, Dosen usw. werden auf **ganze** aufgerundet – statt „3,5 Eier“ also 4 (g/kg/ml/l bleiben genau)
+- Einstellungen: Die Kacheln für Sprache und Währung waren im Dunkel-Modus weiß – jetzt in den Farben des Themes
+
+💾 Die Datenbank wird beim Start automatisch ergänzt (Spalte für das Rezeptfoto) – vorhandene Rezepte bleiben unverändert.
+
 ## 1.8.2
 
 ### 🗓️ Rezepte nach Saison & Anlass

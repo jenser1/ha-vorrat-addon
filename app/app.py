@@ -154,12 +154,21 @@ class Rezept(db.Model):
     zuletzt_gekocht = db.Column(db.Date, nullable=True)  # zuletzt „🍳 Gekocht“ gedrückt
     koch_zaehler = db.Column(db.Integer, default=0)      # wie oft gekocht
     anlaesse = db.Column(db.Text, default="")            # Saison & Anlass, kommagetrennt, z.B. "Herbst,Weihnachten"
+    bild = db.Column(db.String(200), default="")         # Foto: Dateiname in /share/.../bilder (rezept_<id>.<ext>)
     zutaten = db.relationship("RezeptZutat", backref="rezept", lazy=True, cascade="all, delete-orphan")
 
     @property
     def anlass_liste(self):
         """Markierte Jahreszeiten/Anlässe als Liste."""
         return [a for a in (self.anlaesse or "").split(",") if a]
+
+    @property
+    def bild_version(self):
+        """Änderungszeit des Fotos – hängt an der Bild-URL, damit ein neues Foto nicht aus dem Cache kommt."""
+        try:
+            return int(os.path.getmtime(os.path.join(BILDER_DIR, self.bild))) if self.bild else 0
+        except OSError:
+            return 0
 
 class RezeptZutat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -409,6 +418,10 @@ def load_settings():
         g.lang = "de"
         g.waehrung = "EUR"
 
+# Erscheinungsbild: Hell, Dunkel, live wie das HA-Theme, Glas-Look – und die Farbthemen
+THEMES = ("light", "dark", "ha", "glas")
+FARBEN = ("blau", "gruen", "lila", "orange", "rot", "teal")
+
 @app.context_processor
 def inject_globals():
     lang = getattr(g, 'lang', 'de')
@@ -416,8 +429,8 @@ def inject_globals():
     trans = TRANSLATIONS.get(lang, TRANSLATIONS['de'])
     try:
         s = Einstellungen.query.first()
-        theme = s.theme if s and s.theme else "light"
-        farbe = s.farbe if s and s.farbe else "blau"
+        theme = s.theme if s and s.theme in THEMES else "light"
+        farbe = s.farbe if s and s.farbe in FARBEN else "blau"
     except:
         theme = "light"
         farbe = "blau"
@@ -563,6 +576,35 @@ def zahl_de(x, stellen=1):
     if r == int(r):
         return str(int(r))
     return f"{r:.{stellen}f}".rstrip("0").rstrip(".").replace(".", ",")
+
+# Brüche für Stück, Löffel, Packungen … (umgerechnete Rezeptmengen): 1,5 Eier → '1½'
+_BRUECHE = ((0.0, ""), (0.25, "¼"), (1 / 3, "⅓"), (0.5, "½"), (2 / 3, "⅔"), (0.75, "¾"), (1.0, ""))
+
+@app.template_filter("menge")
+def menge_anzeige(wert, einheit=""):
+    """Rezeptmenge küchentauglich: g/ml ab 100 ganzzahlig (187,5 g → '188'), kg/l mit Komma,
+    alles andere als Bruch (0,75 Packung → '¾', 2,25 Eier → '2¼'). 0 → '' (z.B. 'nach Geschmack')."""
+    try:
+        w = float(wert)
+    except (TypeError, ValueError):
+        return ""
+    if not 0 < w < 1e9:  # auch nan/inf
+        return ""
+    b = einheit_basis(einheit)
+    if b and b[0] in ("g", "ml"):
+        if b[1] == 1.0:
+            return str(int(math.floor(w + 0.5))) if w >= 100 else zahl_de(w, 1)
+        return zahl_de(w, 2)
+    if w >= 10:  # 12⅔ Stück wäre albern – ab 10 auf halbe runden
+        w = math.floor(w * 2 + 0.5) / 2
+    ganz = int(math.floor(w))
+    rest = w - ganz
+    wert_bruch, bruch = min(_BRUECHE, key=lambda x: abs(x[0] - rest))
+    if wert_bruch == 1.0:
+        ganz += 1
+    if not ganz and not bruch:
+        bruch = "¼"  # winzige Menge (0,1 Prise) – nicht als 0 zeigen
+    return f"{ganz or ''}{bruch}"
 
 def basis_text(wert, basis, label=None):
     """Menge lesbar: (1500, 'g') → '1,5 kg', (250, 'ml') → '250 ml', (3, 'packung', 'Packung') → '3 Packung'."""
@@ -818,13 +860,21 @@ def _menge_text(zeilen, schl, wert, label, anbruch):
         return f"{offen} angebrochene {label}"
     return f"{zahl_de(voll)} {label} + {offen} angebrochene"
 
+def einkauf_runden(menge, einheit):
+    """Menge für die Einkaufsliste: g/kg/ml/l genau (2 Stellen), Stück/Packung/Dose … ganz aufgerundet –
+    umgerechnete Rezepte ergeben sonst 3,5 Eier."""
+    b = einheit_basis(einheit)
+    if b and b[0] in ("g", "ml"):
+        return round(menge, 2) or 1
+    return max(1, math.ceil(menge - 1e-6))
+
 def _einkauf_menge(zeilen, schl, fehl):
     """Fehlmenge in der Einheit des Produkts → (Name, Menge, Einheit); Packungen/Dosen aufgerundet.
     Zeilen mit Packungsinhalt zuerst – gekauft werden ganze Packungen."""
     for p in sorted(zeilen, key=lambda p: not (p.inhalt and p.inhalt > 0)):
         eb = einheit_basis(p.einheit)
         if eb and eb[0] == schl:
-            return p.name.strip(), round(fehl / eb[1], 2), p.einheit
+            return p.name.strip(), einkauf_runden(fehl / eb[1], p.einheit), p.einheit
         if not eb and (einheit_schluessel(p.einheit) or "stück") == schl:
             return p.name.strip(), max(1, math.ceil(fehl - 1e-6)), p.einheit or "Stück"
         if p.inhalt and p.inhalt > 0:
@@ -876,7 +926,7 @@ def rezept_abgleich(rezept, faktor=1.0, produkte=None):
         name = e["gruppe"]["name"] if e["gruppe"] else ""
         hat_etwas = any(v > 1e-9 for v in bestand.values())
         status, text, hinweis, einkauf = "fehlt", "", "", None
-        rezept_posten = (z.name.strip(), round(max(0.0, float(z.menge or 0)) * faktor, 2) or 1,
+        rezept_posten = (z.name.strip(), einkauf_runden(max(0.0, float(z.menge or 0)) * faktor, z.einheit),
                          z.einheit or "Stück")
         if art in ("ignoriert", "immer"):
             status = "ignoriert"
@@ -937,6 +987,7 @@ def rezept_abgleich(rezept, faktor=1.0, produkte=None):
             auswahl = "__auto__"
         ergebnis.append({
             "zutat": z,
+            "menge": max(0.0, float(z.menge or 0)) * faktor,  # nach Portionen umgerechnet
             "vorrat": zeilen[0] if zeilen else None,
             "vorhanden": status in ("ok", "da", "ignoriert"),
             "status": status,
@@ -1072,7 +1123,7 @@ def koch_abbuchung(rezept, faktor=1.0, ohne=frozenset()):
         z, zeilen, schl, name = a["zutat"], a["zeilen"], a["schl"], a["produkt_name"]
         gk = _norm_text(name)
         e = {"id": z.id, "name": z.name, "produkt": name, "produkt_id": a["produkt_id"], "orte": [],
-             "menge_text": f"{zahl_de(max(0.0, float(z.menge or 0)) * faktor, 2)} {z.einheit or ''}".strip(),
+             "menge_text": f"{menge_anzeige(a['menge'], z.einheit)} {z.einheit or ''}".strip(),
              "status": "", "text": "", "genommen_text": "", "fehl_text": "", "noch_text": "", "loeffel_text": ""}
         posten.append(e)
         if a["art"] in ("ignoriert", "immer"):
@@ -1762,6 +1813,92 @@ def produkt_bild(id):
     from flask import abort
     abort(404)
 
+# ── Rezeptfotos ──────────────────────────────────────────────────────────────
+
+def bild_endung(daten):
+    """Bildtyp an den ersten Bytes erkennen – nicht an Dateiname oder Server-Angabe.
+    → 'jpg' | 'png' | 'gif' | 'webp' | None (kein unterstütztes Bild)."""
+    if daten.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if daten.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if daten[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if daten[:4] == b"RIFF" and daten[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+def bild_herunterladen(url):
+    """Bild einer fremden Seite laden: SSRF-geschützt (jede Weiterleitung geprüft), höchstens
+    MAX_BILD_BYTES. → Bytes oder None."""
+    try:
+        resp = _get_sicher(url, timeout=(4, 12))
+    except Exception:
+        return None
+    try:
+        resp.raise_for_status()
+        angekuendigt = resp.headers.get("Content-Length", "")
+        if angekuendigt.isdigit() and int(angekuendigt) > MAX_BILD_BYTES:
+            return None
+        teile, groesse = [], 0
+        for stueck in resp.iter_content(64 * 1024):
+            groesse += len(stueck)
+            if groesse > MAX_BILD_BYTES:
+                return None
+            teile.append(stueck)
+        return b"".join(teile)
+    except Exception:
+        return None
+    finally:
+        resp.close()
+
+def rezept_bild_loeschen(r):
+    """Foto-Datei(en) eines Rezepts entfernen (alle Endungen)."""
+    for e in ERLAUBTE_BILD_EXT:
+        pfad = os.path.join(BILDER_DIR, f"rezept_{r.id}.{e}")
+        if os.path.exists(pfad):
+            try:
+                os.remove(pfad)
+            except OSError:
+                pass
+    r.bild = ""
+
+def rezept_bild_speichern(r, daten):
+    """Bild-Bytes als Rezeptfoto speichern (ersetzt ein altes). False, wenn es kein Bild ist."""
+    ext = bild_endung(daten or b"")
+    if not ext:
+        return False
+    rezept_bild_loeschen(r)
+    os.makedirs(BILDER_DIR, exist_ok=True)
+    dateiname = f"rezept_{r.id}.{ext}"
+    with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
+        f.write(daten)
+    r.bild = dateiname
+    return True
+
+def rezept_bild_aus_formular(r, form, dateien):
+    """Foto aus dem Rezeptformular: hochgeladene Datei vor der Bild-Adresse vom Web-Import;
+    „Foto entfernen“ löscht. Braucht r.id (nach flush)."""
+    if form.get("bild_entfernen"):
+        rezept_bild_loeschen(r)
+    datei = dateien.get("bild")
+    if datei and datei.filename:
+        daten = datei.read(MAX_BILD_BYTES + 1)
+        if len(daten) > MAX_BILD_BYTES or not rezept_bild_speichern(r, daten):
+            flash("Foto nicht übernommen – erlaubt sind JPG, PNG, GIF und WebP bis 5 MB.", "warning")
+        return
+    url = (form.get("bild_url") or "").strip()
+    if url.startswith(("http://", "https://")) and len(url) <= 2000:
+        if not rezept_bild_speichern(r, bild_herunterladen(url)):
+            flash("Das Foto der Webseite ließ sich nicht laden – du kannst beim Bearbeiten eins hochladen.", "warning")
+
+@app.route("/rezept/<int:id>/bild")
+def rezept_bild(id):
+    r = Rezept.query.get_or_404(id)
+    if r.bild and os.path.exists(os.path.join(BILDER_DIR, r.bild)):
+        return send_from_directory(BILDER_DIR, r.bild)
+    abort(404)
+
 def off_inhalt_parsen(text):
     """Packungsinhalt aus der Open-Food-Facts-Angabe 'quantity': '500 g' → (500.0, 'g'),
     '1,5 l' → (1.5, 'l'), '75 cl' → (750.0, 'ml'); bei '6 x 1,5 l' zählt die Einzelpackung."""
@@ -2295,6 +2432,7 @@ def rezept_neu():
         )
         db.session.add(r)
         db.session.flush()
+        rezept_bild_aus_formular(r, request.form, request.files)
         # Zutaten speichern
         namen = request.form.getlist("zutat_name")
         mengen = request.form.getlist("zutat_menge")
@@ -2316,21 +2454,23 @@ def rezept_detail(id):
     einkauf_count = Einkaufsliste.query.filter_by(erledigt=False).count()
     listen = EinkaufsListe.query.order_by(EinkaufsListe.erstellt.desc()).all()
     # Vorrat-Abgleich (Einheiten umgerechnet, alle Lagerorte, gemerkte Zuordnungen)
-    produkte = Produkt.query.all()
-    abgleich = rezept_abgleich(r, produkte=produkte)
-    produkt_namen = sorted({(p.name or "").strip() for p in produkte if (p.name or "").strip()},
-                           key=lambda n: n.lower())
     # „🍳 Gekocht“: Ergebnis der letzten Abbuchung; ?kochen=<Personen> (Essensplaner) öffnet den Dialog
     gekocht_token = request.args.get("gekocht", "")
     gekocht = koch_ergebnis(gekocht_token, r.id)
     kochen = request.args.get("kochen")
     koch_woche = request.args.get("woche", type=int) if request.args.get("von") == "essensplan" else None
+    # Portionen-Umrechner: ?portionen=<n> (sonst die Personen aus dem Essensplan bzw. die des Rezepts)
+    portionen, faktor = koch_portionen(request.args.get("portionen") or kochen, r)
+    produkte = Produkt.query.all()
+    abgleich = rezept_abgleich(r, faktor, produkte=produkte)
+    produkt_namen = sorted({(p.name or "").strip() for p in produkte if (p.name or "").strip()},
+                           key=lambda n: n.lower())
     return render_template("rezept_detail.html", rezept=r, abgleich=abgleich,
-        produkt_namen=produkt_namen,
+        produkt_namen=produkt_namen, portionen=portionen, faktor=faktor,
         einkauf_count=einkauf_count, listen=listen,
         mahlzeiten=MAHLZEITEN, heute=date.today(),
         gekocht=gekocht, gekocht_token=gekocht_token,
-        koch_auto=bool(kochen), koch_portionen=koch_portionen(kochen, r)[0], koch_woche=koch_woche)
+        koch_auto=bool(kochen), koch_woche=koch_woche)
 
 @app.route("/rezept/<int:id>/bearbeiten", methods=["GET", "POST"])
 def rezept_bearbeiten(id):
@@ -2346,6 +2486,7 @@ def rezept_bearbeiten(id):
         r.kochzeit = form_minuten("kochzeit")
         r.gesamtzeit = form_minuten("gesamtzeit")
         r.anlaesse = anlaesse_aus_form()
+        rezept_bild_aus_formular(r, request.form, request.files)
         # Zutaten neu setzen
         RezeptZutat.query.filter_by(rezept_id=r.id).delete()
         namen = request.form.getlist("zutat_name")
@@ -2366,6 +2507,7 @@ def rezept_bearbeiten(id):
 def rezept_loeschen(id):
     r = Rezept.query.get_or_404(id)
     name = r.name
+    rezept_bild_loeschen(r)
     db.session.delete(r)
     db.session.commit()
     flash(f"Rezept \'{name}\' wurde gelöscht.", "info")
@@ -2404,9 +2546,12 @@ def rezept_zur_liste(rezept, liste_id=None, faktor=1.0):
 @app.route("/rezept/<int:id>/einkaufen", methods=["POST"])
 def rezept_einkaufen(id):
     r = Rezept.query.get_or_404(id)
-    hinzugefuegt, liste = rezept_zur_liste(r, request.form.get("liste_id"))
+    portionen, faktor = koch_portionen(request.form.get("portionen"), r)
+    hinzugefuegt, liste = rezept_zur_liste(r, request.form.get("liste_id"), faktor)
     db.session.commit()
     flash(f"{hinzugefuegt} fehlende Zutaten zur Liste '{liste.name}' hinzugefügt.", "success")
+    if portionen != (r.portionen or 1):
+        return redirect(url_for("rezept_detail", id=id, portionen=portionen))
     return redirect(url_for("rezept_detail", id=id))
 
 def koch_portionen(wert, rezept):
@@ -2850,11 +2995,24 @@ def schema_org_extrahieren(soup):
                 "vorbereitungszeit": zeit_zu_minuten(rezept.get("prepTime")),
                 "kochzeit": zeit_zu_minuten(rezept.get("cookTime")),
                 "gesamtzeit": zeit_zu_minuten(rezept.get("totalTime")),
+                "bild_url": _schema_bild(rezept.get("image")),
                 "quelle": "schema.org",
             }
         except Exception:
             continue
     return None
+
+def _schema_bild(wert):
+    """schema.org „image“ (Text, Liste oder ImageObject) → erste Bild-Adresse oder ''."""
+    if isinstance(wert, list):
+        for w in wert:
+            adresse = _schema_bild(w)
+            if adresse:
+                return adresse
+        return ""
+    if isinstance(wert, dict):
+        return _schema_bild(wert.get("url") or wert.get("contentUrl") or "")
+    return str(wert or "").strip()
 
 def fallback_extrahieren(soup, url):
     """Fallback-Extraktion für Seiten ohne Schema.org über HTML-Heuristiken."""
@@ -3464,6 +3622,16 @@ def rezept_von_url(url):
     if not ergebnis or not ergebnis.get("titel"):
         return None, "Kein Rezept auf dieser Seite gefunden. Bitte prüfe ob die URL direkt zu einem Rezept führt."
 
+    # Foto: aus schema.org, sonst das Vorschaubild der Seite (og:image) – als absolute Adresse
+    if not ergebnis.get("bild_url"):
+        for attr in ({"property": "og:image"}, {"name": "twitter:image"}):
+            meta = soup.find("meta", attrs=attr)
+            if meta and meta.get("content"):
+                ergebnis["bild_url"] = meta["content"].strip()
+                break
+    bild_url = urljoin(url, ergebnis.get("bild_url") or "") if ergebnis.get("bild_url") else ""
+    ergebnis["bild_url"] = bild_url if bild_url.startswith(("http://", "https://")) and len(bild_url) <= 2000 else ""
+
     # Warnung wenn Seite JS-gerendert ist und Zutaten fehlen
     warnung = ergebnis.pop("_warnung", None)
     if warnung == "js_rendered" and not ergebnis.get("zutaten"):
@@ -3709,8 +3877,10 @@ def einstellungen():
         # Bestehende Werte als Default → Teil-Formulare setzen nichts zurück
         s.sprache = request.form.get("sprache", s.sprache)
         s.waehrung = request.form.get("waehrung", s.waehrung)
-        s.theme = request.form.get("theme", s.theme)
-        s.farbe = request.form.get("farbe", s.farbe)
+        if request.form.get("theme") in THEMES:
+            s.theme = request.form["theme"]
+        if request.form.get("farbe") in FARBEN:
+            s.farbe = request.form["farbe"]
         if "kalender_entity" in request.form:
             s.kalender_entity = request.form.get("kalender_entity", "").strip()
         if "timer_notify" in request.form:
@@ -4324,7 +4494,7 @@ def db_migrieren():
                 cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} INTEGER")
                 conn.commit()
         for _rz_spalte, _rz_typ in (("zuletzt_gekocht", "DATE"), ("koch_zaehler", "INTEGER DEFAULT 0"),
-                                    ("anlaesse", "TEXT DEFAULT ''")):
+                                    ("anlaesse", "TEXT DEFAULT ''"), ("bild", "VARCHAR(200) DEFAULT ''")):
             if tabelle_existiert("rezept") and not spalte_existiert("rezept", _rz_spalte):
                 cur.execute(f"ALTER TABLE rezept ADD COLUMN {_rz_spalte} {_rz_typ}")
                 conn.commit()

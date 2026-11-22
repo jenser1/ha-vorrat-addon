@@ -44,6 +44,28 @@
   .gk-box{ max-width:480px; width:100%; margin:0; max-height:calc(100vh - 32px); display:flex; flex-direction:column; }
   .gk-vorschau{ overflow-y:auto; overflow-x:hidden; flex:1; min-height:60px; margin:4px 0 14px; }
   .gk-fuss{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px; }
+  /* 👥 Portionen-Umrechner */
+  .rz-port{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 10px; margin:0 0 12px;
+            background:var(--bg); border-radius:10px; font-size:0.88rem; }
+  .rz-port-label{ color:var(--muted); font-weight:600; }
+  .rz-pm{ flex:none; width:38px; height:38px; border-radius:50%; border:1.5px solid var(--border);
+          background:var(--card); color:var(--text); font-size:1.2rem; font-weight:700; line-height:1;
+          cursor:pointer; touch-action:manipulation; padding:0; }
+  .rz-pm:active{ transform:scale(0.93); }
+  #rz-portionen{ width:60px; padding:7px 4px; text-align:center; font-weight:700; -moz-appearance:textfield; }
+  #rz-portionen::-webkit-inner-spin-button, #rz-portionen::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
+  .rz-original{ margin-left:auto; border:none; background:none; color:var(--primary); font-size:0.8rem;
+                font-weight:600; cursor:pointer; padding:4px 2px; }
+  .rz-original[hidden]{ display:none; }
+  /* Rezeptfoto randlos oben in der Infokarte */
+  .rz-titelbild{ display:block; width:calc(100% + 32px); max-width:none; height:260px; object-fit:cover;
+                 margin:-16px -16px 16px; border-radius:var(--card-radius, 16px) var(--card-radius, 16px) 0 0; }
+  @media (max-width: 480px){
+    .rz-titelbild{ width:calc(100% + 24px); margin:-12px -12px 12px; height:200px;
+                   border-radius:var(--card-radius, 12px) var(--card-radius, 12px) 0 0; }
+  }
+  #rz-abgleich{ transition:opacity 0.15s; }
+  #rz-abgleich.rz-laedt{ opacity:0.55; }
 </style>
 
 {% if gekocht %}
@@ -133,6 +155,9 @@
   <!-- Links: Info + Anleitung -->
   <div>
     <div class="card">
+      {% if rezept.bild %}
+      <img class="rz-titelbild" src="{{ url_for('rezept_bild', id=rezept.id, v=rezept.bild_version) }}" alt="">
+      {% endif %}
       <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;">
         <div>
           <h2 style="font-size: 1.4rem; font-weight: 700;">{{ rezept.name }}</h2>
@@ -183,6 +208,21 @@
         <span style="font-size:0.8rem; color:var(--muted);">{{ rezept.zutaten|length }} Zutaten</span>
       </div>
 
+      {% if rezept.zutaten %}
+      <!-- Portionen-Umrechner: Mengen, Vorrat-Abgleich, Einkauf, Kochmodus, Gekocht und Essensplan -->
+      <div class="rz-port">
+        <span class="rz-port-label">👥 Für</span>
+        <button type="button" class="rz-pm" onclick="portionenSchritt(-1)" aria-label="Eine Portion weniger">−</button>
+        <input type="number" id="rz-portionen" min="1" max="999" step="1" inputmode="numeric"
+               value="{{ portionen }}" aria-label="Anzahl Portionen">
+        <button type="button" class="rz-pm" onclick="portionenSchritt(1)" aria-label="Eine Portion mehr">+</button>
+        <span class="rz-port-label">Portionen</span>
+        <button type="button" id="rz-original" class="rz-original" onclick="portionenSetzen(RZ_BASIS)"
+                {{ 'hidden' if portionen == (rezept.portionen or 1) }} title="Mengen wie im Rezept">↺ Original ({{ rezept.portionen }})</button>
+      </div>
+      {% endif %}
+
+      <div id="rz-abgleich">
       {% set fehlend = abgleich | selectattr("status", "in", ["fehlt", "wenig"]) | list %}
       {% set unsicher = abgleich | selectattr("status", "equalto", "unsicher") | list %}
       {% if fehlend or unsicher %}
@@ -208,7 +248,7 @@
           <div style="flex: 1; min-width: 0;">
             <div style="font-weight: 600; color: var(--text); font-size: 0.9rem;">{{ a.zutat.name }}</div>
             <div style="font-size: 0.78rem; color: var(--muted);">
-              <span>benötigt: {{ a.zutat.menge|int if a.zutat.menge == a.zutat.menge|int else a.zutat.menge }} {{ a.zutat.einheit }}</span>
+              <span{% if faktor != 1 and a.zutat.menge %} title="im Rezept: {{ a.zutat.menge|menge(a.zutat.einheit) }} {{ a.zutat.einheit }}"{% endif %}>benötigt: {{ a.menge|menge(a.zutat.einheit) }} {{ a.zutat.einheit }}</span>
               · <span style="color: {{ statusfarbe }}; font-weight: 600;">
                 {%- if a.produkt_id -%}
                   <a href="{{ url_for('produkt_detail', id=a.produkt_id) }}" style="color: inherit; text-decoration: none;" title="Produkt öffnen">{{ a.text }}</a>
@@ -232,6 +272,7 @@
 
       {% if fehlend or unsicher %}
       <form method="post" action="{{ url_for('rezept_einkaufen', id=rezept.id) }}" style="margin-top: 16px;">
+        <input type="hidden" name="portionen" value="{{ portionen }}">
         <select name="liste_id" style="width:100%; margin-bottom:8px; padding:8px 10px;
                 border:1px solid var(--border); border-radius:8px; font-size:0.88rem;">
           {% for l in listen %}
@@ -241,10 +282,11 @@
           {% endfor %}
         </select>
         <button type="submit" class="btn btn-primary" style="width: 100%;">
-          🛒 Fehlende Zutaten hinzufügen
+          🛒 Fehlende Zutaten hinzufügen{% if portionen != (rezept.portionen or 1) %} ({{ portionen }} Port.){% endif %}
         </button>
       </form>
       {% endif %}
+      </div>
     </div>
   </div>
 
@@ -270,7 +312,7 @@
       </div>
       <div class="form-group" style="margin-bottom:18px;">
         <label>👥 Für wie viele Personen?</label>
-        <input type="number" name="personen" min="1" step="1" value="{{ rezept.portionen }}">
+        <input type="number" name="personen" id="ep-personen" min="1" step="1" value="{{ portionen }}">
       </div>
       <div style="display:flex; gap:10px;">
         <button type="submit" class="btn btn-primary" style="flex:1;">💾 Einplanen</button>
@@ -329,7 +371,7 @@
       {% endif %}
       <div class="form-group" style="margin-bottom:6px;">
         <label for="gk-portionen">🍽️ Für wie viele Portionen?</label>
-        <input type="number" name="portionen" id="gk-portionen" min="1" max="999" step="1" value="{{ koch_portionen }}">
+        <input type="number" name="portionen" id="gk-portionen" min="1" max="999" step="1" value="{{ portionen }}">
       </div>
       <div id="gk-vorschau" class="gk-vorschau"><p class="gk-klein">Lade Vorschau …</p></div>
       <div style="display:flex; gap:10px;">
@@ -341,6 +383,73 @@
 </div>
 
 <script>
+// ===== 👥 Portionen-Umrechner: Abgleich neu vom Server holen (dieselbe Rechnung wie Einkauf/Gekocht) =====
+var RZ_URL = {{ url_for('rezept_detail', id=rezept.id)|tojson }};
+var RZ_BASIS = {{ (rezept.portionen or 1)|tojson }};
+var rzAktuell = {{ portionen|tojson }};
+var rzAnfrage = 0;
+var rzTimer = null;
+
+function portionenWert() {
+  var feld = document.getElementById('rz-portionen');
+  var n = feld ? parseInt(feld.value, 10) : NaN;
+  return (n >= 1 && n <= 999) ? n : null;
+}
+function portionenSchritt(d) {
+  portionenSetzen(Math.min(999, Math.max(1, (portionenWert() || rzAktuell) + d)));
+}
+function portionenSetzen(n) {
+  document.getElementById('rz-portionen').value = n;
+  clearTimeout(rzTimer);
+  rzTimer = setTimeout(portionenLaden, 150);   // schnelles Tippen auf +/− = eine Anfrage
+}
+function portionenLaden() {
+  var n = portionenWert();
+  if (!n || n === rzAktuell) { return; }
+  rzAktuell = n;
+  var orig = document.getElementById('rz-original');
+  if (orig) { orig.hidden = (n === RZ_BASIS); }
+  // „Gekocht“ und „Zum Essensplan“ übernehmen die Portionen
+  var gk = document.getElementById('gk-portionen');
+  if (gk && document.getElementById('gekocht-modal').style.display !== 'flex') { gk.value = n; }
+  var ep = document.getElementById('ep-personen');
+  if (ep) { ep.value = n; }
+  var ziel = RZ_URL + (n === RZ_BASIS ? '' : '?portionen=' + n);
+  try {   // Adresse mitführen – Neu laden behält die Portionen
+    var u = new URL(location.href);
+    if (n === RZ_BASIS) { u.searchParams.delete('portionen'); } else { u.searchParams.set('portionen', n); }
+    history.replaceState(history.state, '', u.toString());
+  } catch (e) {}
+  var nr = ++rzAnfrage;
+  var box = document.getElementById('rz-abgleich');
+  box.classList.add('rz-laedt');
+  fetch(RZ_URL + '?portionen=' + n, { credentials: 'same-origin' })
+    .then(function(r) { if (!r.ok) { throw new Error('HTTP ' + r.status); } return r.text(); })
+    .then(function(html) {
+      if (nr !== rzAnfrage) { return; }
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var neu = doc.getElementById('rz-abgleich');
+      if (!neu) { throw new Error('kein Abgleich'); }
+      box.innerHTML = neu.innerHTML;
+      var kz = document.getElementById('koch-zutaten-inhalt');
+      var kzNeu = doc.getElementById('koch-zutaten-inhalt');
+      if (kz && kzNeu) { kz.innerHTML = kzNeu.innerHTML; }
+      box.classList.remove('rz-laedt');
+    })
+    .catch(function() { if (nr === rzAnfrage) { location.href = ziel; } });  // notfalls ganz neu laden
+}
+(function() {
+  var feld = document.getElementById('rz-portionen');
+  if (!feld) { return; }
+  feld.addEventListener('input', function() { clearTimeout(rzTimer); rzTimer = setTimeout(portionenLaden, 450); });
+  feld.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); clearTimeout(rzTimer); portionenLaden(); feld.blur(); }
+  });
+  feld.addEventListener('change', function() {   // leer/ungültig verlassen → letzter Wert
+    if (!portionenWert()) { feld.value = rzAktuell; } else { clearTimeout(rzTimer); portionenLaden(); }
+  });
+})();
+
 // ===== 🍳 Gekocht: Vorschau laden (abgewählte Zutaten bleiben beim Ändern der Portionen abgewählt) =====
 var GK_VORSCHAU_URL = {{ url_for('rezept_gekocht_vorschau', id=rezept.id)|tojson }};
 var gkAbgewaehlt = {};
@@ -488,15 +597,16 @@ document.addEventListener('keydown', function(e) {
   </div>
   {% if abgleich %}
   <div id="koch-zutaten" class="koch-zutaten" hidden>
-    <div class="koch-zutaten-titel">🧺 Zutaten</div>
+    <div id="koch-zutaten-inhalt">
+    <div class="koch-zutaten-titel">🧺 Zutaten · {{ portionen }} Portionen</div>
     <div class="koch-zutaten-liste">
       {% for a in abgleich %}
-      {% set m = a.zutat.menge %}
       <div class="koch-zutat">
-        <span class="koch-zutat-menge">{{ m|int if m == m|int else m }} {{ a.zutat.einheit }}</span>
+        <span class="koch-zutat-menge">{{ a.menge|menge(a.zutat.einheit) }} {{ a.zutat.einheit }}</span>
         <span class="koch-zutat-name">{{ a.zutat.name }}</span>
       </div>
       {% endfor %}
+    </div>
     </div>
   </div>
   {% endif %}

@@ -178,8 +178,8 @@
     /* ══ CARDS ══ */
     .card {
       background: var(--card);
-      border-radius: 16px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      border-radius: var(--card-radius, 16px);
+      box-shadow: var(--card-shadow, 0 1px 4px rgba(0,0,0,0.08));
       padding: 16px;
       margin-bottom: 16px;
     }
@@ -343,7 +343,7 @@
       .stat-value { font-size: 1.4rem; }
       .topbar { height: 48px; }
       .topbar h1 { font-size: 0.9rem; }
-      .card { padding: 12px; border-radius: 12px; }
+      .card { padding: 12px; border-radius: var(--card-radius, 12px); }
       .card-header { flex-direction: column; align-items: flex-start; gap: 8px; }
       .btn-sm { padding: 6px 10px; font-size: 0.78rem; }
     }
@@ -405,6 +405,7 @@
 
       .sidebar a:hover, .sidebar a.active {
         background: rgba(59,130,246,0.2);
+        background: color-mix(in srgb, var(--primary) 22%, transparent);  /* in der gewählten Farbe */
         color: white;
       }
 
@@ -446,9 +447,165 @@
         max-width: none;
       }
     }
+
+    /* ══ THEME „WIE HOME ASSISTANT“ ══
+       Die Variablen setzt das Skript direkt nach dem body-Tag live aus dem aktiven HA-Theme. */
+    body[data-skin="ha"] .card { border: var(--ha-rand-breite, 0) solid var(--ha-rand-farbe, var(--border)); }
+    body[data-skin="ha"][data-ha-bg] { background: var(--ha-hintergrund); background-attachment: fixed; }
+    body[data-skin="ha"][data-ha-bg] .main-wrap { background: transparent; }
+    body[data-skin="ha"] .sidebar { border-right: 1px solid var(--border); }
+    body[data-skin="ha"] .sidebar-logo { color: var(--sidebar-text); border-bottom-color: var(--border); }
+    body[data-skin="ha"] .sidebar-section { color: var(--muted); }
+    body[data-skin="ha"] .sidebar a:hover { color: var(--sidebar-text); }
+    body[data-skin="ha"] .sidebar a.active { color: var(--primary); }
+    body[data-skin="ha"] .nav-item { color: var(--sidebar-text); opacity: 0.75; }
+    body[data-skin="ha"] .nav-item.active { color: var(--primary); opacity: 1; }
+
+    /* ══ THEME „GLAS“ ══ Farbverlauf in der gewählten Farbe + halbtransparente Karten */
+    body[data-skin="glas"] {
+      --bg: rgba(255,255,255,0.05);
+      --card: rgba(255,255,255,0.075);
+      --flaeche: #17142e;                       /* undurchsichtig: Dialoge, Kochmodus */
+      --text: #f3f1fa;
+      --muted: #b7b4cc;
+      --border: rgba(255,255,255,0.14);
+      --sidebar-bg: rgba(8,7,22,0.38);
+      --sidebar-text: #dcd9ec;
+      --topbar-bg: rgba(8,7,22,0.30);
+      --topbar-text: #f3f1fa;
+      --input-bg: rgba(255,255,255,0.06);
+      --card-radius: 22px;
+      --card-shadow: 0 8px 30px rgba(0,0,0,0.22);
+      background: #14122b;
+      background:
+        radial-gradient(1100px 700px at 10% -10%, color-mix(in srgb, var(--primary) 50%, transparent), transparent 62%),
+        radial-gradient(900px 650px at 105% 105%, color-mix(in srgb, var(--primary-dark) 38%, transparent), transparent 60%),
+        linear-gradient(160deg, #150f2e 0%, #1b1440 48%, #0d1124 100%);
+      background-attachment: fixed;
+    }
+    body[data-skin="glas"] .main-wrap { background: transparent; }
+    body[data-skin="glas"] .card, body[data-skin="glas"] .stat {
+      background: var(--card); border: 1px solid var(--border);
+      -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%);
+    }
+    body[data-skin="glas"] .sidebar, body[data-skin="glas"] .topbar, body[data-skin="glas"] .bottom-nav {
+      -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    }
+    body[data-skin="glas"] .sidebar { border-right: 1px solid var(--border); }
+    body[data-skin="glas"] .topbar { box-shadow: none; }
+    body[data-skin="glas"] .btn { border-radius: 12px; }
+    body[data-skin="glas"] option { background: #1b1736; color: var(--text); }
+    /* Abschnitts-Überschriften wie im HA-Dashboard: „🧺 ZUTATEN ───── 7 Zutaten“ */
+    body[data-skin="glas"] .card-header .card-title {
+      flex: 1; display: flex; align-items: center; gap: 10px; text-transform: uppercase;
+      letter-spacing: 0.1em; font-size: 0.78rem; color: var(--muted);
+    }
+    body[data-skin="glas"] .card-header .card-title::after { content: ''; flex: 1; height: 1px; background: var(--border); margin-right: 10px; }
+    @media (max-width: 480px) { body[data-skin="glas"] .card-header .card-title { width: 100%; } }
+
+    /* Durchsichtige Karten (Glas, oder ein HA-Theme mit halbtransparenten Karten):
+       Dialoge und Kochmodus brauchen eine feste Fläche, sonst scheint die Seite durch */
+    body[data-glas] .card, body[data-glas] .stat {
+      -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%);
+    }
+    body[data-glas] [id$="-modal"] .card, body[data-glas] .timer-box,
+    body[data-skin="glas"] [id$="-modal"] .card, body[data-skin="glas"] .timer-box { background: var(--flaeche); }
+    body[data-glas] .kochmodus, body[data-skin="glas"] .kochmodus { background: var(--flaeche); }
   </style>
 </head>
-<body data-theme="{{ theme }}" data-farbe="{{ farbe }}">
+<body data-theme="{{ 'dark' if theme in ('dark', 'glas') else 'light' }}" data-farbe="{{ farbe }}"
+      {%- if theme in ('ha', 'glas') %} data-skin="{{ theme }}"{% endif %}>
+{% if theme == 'ha' %}
+<script>
+/* Theme „Wie Home Assistant“: Farben, Hell/Dunkel, Kartenrundung und Dashboard-Hintergrund live aus
+   dem aktiven HA-Theme. Die App läuft per Ingress im iframe auf derselben Adresse wie Home Assistant,
+   darum ist das Eltern-Dokument lesbar. Direkt geöffnet (ohne HA): Hell/Dunkel nach dem System. */
+(function () {
+  var b = document.body;
+  var ZUORDNUNG = [   // App-Variable ← HA-Variablen (die erste vorhandene gewinnt)
+    ['--bg', ['--primary-background-color']],
+    ['--flaeche', ['--primary-background-color']],
+    ['--card', ['--ha-card-background', '--card-background-color']],
+    ['--input-bg', ['--card-background-color']],
+    ['--text', ['--primary-text-color']],
+    ['--muted', ['--secondary-text-color']],
+    ['--border', ['--divider-color']],
+    ['--primary', ['--primary-color']],
+    ['--primary-dark', ['--dark-primary-color', '--primary-color']],
+    ['--danger', ['--error-color']],
+    ['--warning', ['--warning-color']],
+    ['--success', ['--success-color']],
+    ['--sidebar-bg', ['--sidebar-background-color']],
+    ['--sidebar-text', ['--sidebar-text-color']],
+    ['--topbar-bg', ['--app-header-background-color']],
+    ['--topbar-text', ['--app-header-text-color']],
+    ['--card-radius', ['--ha-card-border-radius']],
+    ['--card-shadow', ['--ha-card-box-shadow']],
+    ['--ha-rand-breite', ['--ha-card-border-width']],
+    ['--ha-rand-farbe', ['--ha-card-border-color']],
+    ['--ha-hintergrund', ['--lovelace-background']]
+  ];
+  var gesetzt = [];
+  var leinwand = document.createElement('canvas').getContext('2d');
+
+  function farbeRgba(farbe) {   // beliebige CSS-Farbe → [r, g, b, a] oder null
+    if (!farbe || !leinwand) { return null; }
+    leinwand.fillStyle = '#010203';
+    leinwand.fillStyle = farbe;
+    var f = leinwand.fillStyle;
+    if (f === '#010203') { return null; }
+    if (f.charAt(0) === '#') {
+      return [parseInt(f.substr(1, 2), 16), parseInt(f.substr(3, 2), 16), parseInt(f.substr(5, 2), 16), 1];
+    }
+    var m = f.match(/[\d.]+/g);
+    return m ? [+m[0], +m[1], +m[2], m.length > 3 ? +m[3] : 1] : null;
+  }
+
+  function anwenden() {
+    var stil = null;
+    try {
+      if (window.parent && window.parent !== window) {
+        stil = window.parent.getComputedStyle(window.parent.document.documentElement);
+      }
+    } catch (e) { stil = null; }   // andere Adresse als HA → kein Zugriff
+    for (var i = 0; i < gesetzt.length; i++) { b.style.removeProperty(gesetzt[i]); }
+    gesetzt = [];
+    var hg = stil ? stil.getPropertyValue('--primary-background-color').trim() : '';
+    if (!hg) {
+      var dunkel = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      b.setAttribute('data-theme', dunkel ? 'dark' : 'light');
+      b.removeAttribute('data-ha-bg');
+      b.removeAttribute('data-glas');
+      return;
+    }
+    ZUORDNUNG.forEach(function (z) {
+      for (var j = 0; j < z[1].length; j++) {
+        var wert = stil.getPropertyValue(z[1][j]).trim();
+        if (wert) { b.style.setProperty(z[0], wert); gesetzt.push(z[0]); return; }
+      }
+    });
+    var rgb = farbeRgba(hg);
+    var hell = rgb ? (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) : 255;
+    b.setAttribute('data-theme', hell < 128 ? 'dark' : 'light');
+    if (gesetzt.indexOf('--ha-hintergrund') >= 0) { b.setAttribute('data-ha-bg', ''); } else { b.removeAttribute('data-ha-bg'); }
+    var karte = farbeRgba(b.style.getPropertyValue('--card'));
+    if (karte && karte[3] < 0.95) { b.setAttribute('data-glas', ''); } else { b.removeAttribute('data-glas'); }
+  }
+
+  anwenden();
+  // Theme oder Hell/Dunkel in HA gewechselt → sofort übernehmen
+  try {
+    var beobachter = new MutationObserver(function () { setTimeout(anwenden, 30); });
+    beobachter.observe(window.parent.document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+    beobachter.observe(window.parent.document.head, { childList: true });
+  } catch (e) {}
+  if (window.matchMedia) {
+    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) { mq.addEventListener('change', function () { setTimeout(anwenden, 120); }); }
+  }
+})();
+</script>
+{% endif %}
 
 <!-- Desktop Sidebar (nur ab 768px sichtbar) -->
 <nav class="sidebar" style="display:none">

@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory, abort, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
 import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal, secrets, hmac
@@ -1580,8 +1580,19 @@ def produkt_neu():
             mhd=konserv_effektives_mhd(request.form, standard_mhd)
         )
         p.inhalt, p.inhalt_einheit = inhalt_aus_formular(request.form, p.einheit)
+        # Barcode-Scan: EAN + Nährwerte aus Open Food Facts mitspeichern
+        p.barcode = re.sub(r"\D", "", request.form.get("barcode", ""))[:50]
+        for feld in ("kcal", "eiweiss", "fett", "kohlenhydrate"):
+            setattr(p, feld, _zahl_oder_none(request.form.get(feld)))
         db.session.add(p)
         db.session.commit()
+        off_bild_url = (request.form.get("off_bild_url") or "").strip()
+        if p.barcode and off_bild_url.startswith("https://"):
+            try:
+                p.bild = off_bild_speichern(p.id, off_bild_url)
+                db.session.commit()
+            except Exception:
+                pass  # Bild ist optional
         # Neue Werte als Stammdaten sichern (damit sie verwaltbar sind)
         stammdaten_sicherstellen("lagerort", p.lagerort)
         stammdaten_sicherstellen("kategorie", p.kategorie)
@@ -2010,6 +2021,81 @@ def openfoodfacts_suche(begriff):
         return [], f"Keine Treffer für '{begriff}'."
     return treffer, None
 
+def off_bild_speichern(pid, bild_url):
+    """Lädt ein Open-Food-Facts-Bild und speichert es als Produktbild; gibt den Dateinamen zurück.
+    Bild-URL stammt aus Fremddaten -> gleicher SSRF-Schutz wie Web-Import (_get_sicher prüft
+    auch jede Weiterleitung). Wirft bei Fehlern."""
+    ir = _get_sicher(bild_url, timeout=(4, 12))
+    ir.raise_for_status()
+    # Größe begrenzen: MAX_CONTENT_LENGTH schützt nur Uploads, nicht diesen Download
+    angekuendigt = ir.headers.get("Content-Length")
+    if angekuendigt and int(angekuendigt) > MAX_BILD_BYTES:
+        raise ValueError("Bild zu groß")
+    inhalt = b""
+    for stueck in ir.iter_content(8192):
+        inhalt += stueck
+        if len(inhalt) > MAX_BILD_BYTES:
+            raise ValueError("Bild zu groß")
+    m = re.search(r"\.(jpg|jpeg|png|gif|webp)(?:\.|\?|$)", bild_url, re.I)
+    ext = (m.group(1).lower() if m else "jpg")
+    dateiname = f"produkt_{pid}.{ext}"
+    with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
+        f.write(inhalt)
+    for e in ERLAUBTE_BILD_EXT:
+        if e != ext:
+            alt = os.path.join(BILDER_DIR, f"produkt_{pid}.{e}")
+            if os.path.exists(alt):
+                try: os.remove(alt)
+                except OSError: pass
+    return dateiname
+
+def scan_zubuchmenge(p, code):
+    """Vorschlag für einen Scan in der Einheit des Produkts: Packung/Stück = 1, bei g/kg/ml/l die
+    Packungsgröße aus Open Food Facts. None = unbekannt, dann trägt der Nutzer die Menge ein."""
+    if not ist_masseinheit(p.einheit):
+        return 1.0
+    daten, _ = openfoodfacts_abrufen(code)
+    inhalt = daten.get("inhalt") if daten else None
+    if not inhalt:
+        return None
+    von, nach = einheit_basis(inhalt[1]), einheit_basis(p.einheit)
+    if not von or not nach or von[0] != nach[0]:
+        return None  # z. B. Packung in ml, Produkt in g: nicht umrechenbar
+    return round(inhalt[0] * von[1] / nach[1], 3)
+
+@app.route("/api/barcode/<code>")
+def api_barcode(code):
+    """Barcode-Scan: erst im eigenen Vorrat suchen (dann nur Menge erhöhen), sonst Open Food Facts."""
+    code = re.sub(r"\D", "", code or "")
+    if not (6 <= len(code) <= 14):
+        return jsonify({"fehler": "Ungültiger Barcode."}), 400
+    vorhanden = Produkt.query.filter_by(barcode=code).first()
+    if vorhanden:
+        return jsonify({"code": code, "vorrat": {
+            "id": vorhanden.id, "name": vorhanden.name,
+            "menge": vorhanden.menge, "einheit": vorhanden.einheit,
+            "zubuchen": scan_zubuchmenge(vorhanden, code),
+            "url": url_for("produkt_detail", id=vorhanden.id)}})
+    daten, fehler = openfoodfacts_abrufen(code)
+    if fehler:
+        # Unbekannter Code ist kein Abbruch: Barcode trotzdem übernehmen, Name von Hand
+        return jsonify({"code": code, "off": None, "fehler": fehler})
+    return jsonify({"code": code, "off": daten})
+
+@app.route("/api/barcode/<int:id>/zubuchen", methods=["POST"])
+def api_barcode_zubuchen(id):
+    """Scan eines bereits vorhandenen Produkts: Menge in der Einheit des Produkts erhöhen.
+    Bei g/kg/ml/l muss die Menge angegeben sein, sonst würde still nur 1 g gebucht."""
+    p = Produkt.query.get_or_404(id)
+    wert = _zahl_oder_none(request.form.get("menge"))
+    if wert is None and not ist_masseinheit(p.einheit):
+        wert = 1.0
+    if wert is None or not (0 < wert < 1_000_000):  # schließt auch nan/inf aus
+        return jsonify({"fehler": "Bitte eine gültige Menge eingeben."}), 400
+    p.menge = round((p.menge or 0) + wert, 3)
+    db.session.commit()
+    return jsonify({"id": p.id, "name": p.name, "menge": p.menge, "einheit": p.einheit})
+
 @app.route("/produkt/<int:id>/off-suche", methods=["POST"])
 def produkt_off_suche(id):
     Produkt.query.get_or_404(id)
@@ -2041,31 +2127,7 @@ def produkt_off_import(id):
     bild_ok = True
     if daten["bild_url"]:
         try:
-            # Bild-URL stammt aus Fremddaten (Open Food Facts) -> gleicher SSRF-Schutz wie
-            # Web-Import, inkl. Prüfung jeder Weiterleitung
-            ir = _get_sicher(daten["bild_url"], timeout=(4, 12))
-            ir.raise_for_status()
-            # Größe begrenzen: MAX_CONTENT_LENGTH schützt nur Uploads, nicht diesen Download
-            angekuendigt = ir.headers.get("Content-Length")
-            if angekuendigt and int(angekuendigt) > MAX_BILD_BYTES:
-                raise ValueError("Bild zu groß")
-            inhalt = b""
-            for stueck in ir.iter_content(8192):
-                inhalt += stueck
-                if len(inhalt) > MAX_BILD_BYTES:
-                    raise ValueError("Bild zu groß")
-            m = re.search(r"\.(jpg|jpeg|png|gif|webp)(?:\.|\?|$)", daten["bild_url"], re.I)
-            ext = (m.group(1).lower() if m else "jpg")
-            dateiname = f"produkt_{id}.{ext}"
-            with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
-                f.write(inhalt)
-            for e in ERLAUBTE_BILD_EXT:
-                if e != ext:
-                    alt = os.path.join(BILDER_DIR, f"produkt_{id}.{e}")
-                    if os.path.exists(alt):
-                        try: os.remove(alt)
-                        except OSError: pass
-            p.bild = dateiname
+            p.bild = off_bild_speichern(id, daten["bild_url"])
         except Exception:
             bild_ok = False
 

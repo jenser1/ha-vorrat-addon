@@ -1,5 +1,14 @@
 # Changelog
 
+## Nächste Version
+
+### 📷 Barcode-Scan
+- Beim Anlegen eines Produkts: Barcode per Kamera (BarcodeDetector, ZXing als Fallback), Handscanner oder EAN-Eingabe erfassen
+- Name, Inhalt, Nährwerte und Bild kommen aus Open Food Facts; der Barcode wird gespeichert
+- Bereits bekannter Barcode: Menge zubuchen statt Dublette anlegen – bei Packung/Stück 1, bei g/kg/ml/l ist die Packungsgröße aus Open Food Facts vorbelegt und änderbar
+- In der Companion-App wird deren nativer Barcode-Scanner genutzt, auch ohne HTTPS
+- Im Browser ohne HTTPS (lokale `http://`-Adresse) wird der Barcode per Foto gelesen, weil Browser dort die Live-Kamera sperren
+
 ## 1.8.3
 
 ### 👥 Portionen-Umrechner

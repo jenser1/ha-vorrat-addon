@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, g, session, send_from_directory, abort, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date, datetime, timedelta
 import os, re, pdfplumber, tempfile, json, requests, sqlite3, threading, time, sys, signal, secrets, hmac
@@ -1580,8 +1580,19 @@ def produkt_neu():
             mhd=konserv_effektives_mhd(request.form, standard_mhd)
         )
         p.inhalt, p.inhalt_einheit = inhalt_aus_formular(request.form, p.einheit)
+        # Barcode-Scan: EAN + Nährwerte aus Open Food Facts mitspeichern
+        p.barcode = re.sub(r"\D", "", request.form.get("barcode", ""))[:50]
+        for feld in ("kcal", "eiweiss", "fett", "kohlenhydrate"):
+            setattr(p, feld, _zahl_oder_none(request.form.get(feld)))
         db.session.add(p)
         db.session.commit()
+        off_bild_url = (request.form.get("off_bild_url") or "").strip()
+        if p.barcode and off_bild_url.startswith("https://"):
+            try:
+                p.bild = off_bild_speichern(p.id, off_bild_url)
+                db.session.commit()
+            except Exception:
+                pass  # Bild ist optional
         # Neue Werte als Stammdaten sichern (damit sie verwaltbar sind)
         stammdaten_sicherstellen("lagerort", p.lagerort)
         stammdaten_sicherstellen("kategorie", p.kategorie)
@@ -1601,8 +1612,12 @@ def produkt_neu():
         _vorwahl = request.args.get("konserv")
     elif request.args.get("frost"):
         _vorwahl = "eingefroren"
+    kontext = produkt_form_kontext()
+    # Für den Barcode-Scan: Packungsgröße im Browser in die gewählte Einheit umrechnen
+    masseinheiten = {e: einheit_basis(e) for e in [*(kontext.get("einheiten") or []), *EINHEITEN]
+                     if ist_masseinheit(e)}
     return render_template("produkt_form.html", produkt=None, konserv_vorwahl=_vorwahl,
-                           zurueck_url=uebersicht_url(), **produkt_form_kontext())
+                           zurueck_url=uebersicht_url(), masseinheiten=masseinheiten, **kontext)
 
 def _zahl_oder_none(wert):
     """Formularzahl ('12,5' / '' / Unsinn) → float oder None."""
@@ -1899,18 +1914,47 @@ def rezept_bild(id):
         return send_from_directory(BILDER_DIR, r.bild)
     abort(404)
 
-def off_inhalt_parsen(text):
+def _off_zahl(roh, einheit):
+    """Zahl aus 'quantity': '1,5' → 1.5; bei g/ml ist '1.000' ein Tausenderpunkt (bei kg/l nicht)."""
+    if "." in roh and "," in roh:
+        dezimal = "," if roh.rfind(",") > roh.rfind(".") else "."
+        roh = roh.replace("." if dezimal == "," else ",", "").replace(dezimal, ".")
+    elif einheit in ("g", "gr", "ml") and re.fullmatch(r"[1-9]\d{0,2}[.,]\d{3}", roh):
+        roh = re.sub(r"[.,]", "", roh)
+    else:
+        roh = roh.replace(",", ".")
+    try:
+        return float(roh)
+    except ValueError:
+        return None
+
+def _off_stueckzahl(t, treffer):
+    """Anzahl Einzelpackungen um die Mengenangabe: '6 x 330 ml', '330 ml x 6', '6 Dosen à 330 ml', '6er'."""
+    einheiten = r"(?:kg|gr|g|ml|cl|dl|l)\b"
+    m = (re.search(rf"(\d+)\s*(?:(?!{einheiten})[a-zäöü.]+\s*)?(?:x|×|\*|à|a|je|@)\s*$", t[:treffer.start()])
+         or re.match(rf"\s*(?:x|×|\*)\s*(\d+)\b(?!\s*{einheiten})", t[treffer.end():])
+         or re.search(r"\b(\d+)er\b", t))
+    anzahl = int(m.group(1)) if m else 1
+    return anzahl if 1 <= anzahl <= 1000 else 1
+
+def off_inhalt_parsen(text, gesamt=False):
     """Packungsinhalt aus der Open-Food-Facts-Angabe 'quantity': '500 g' → (500.0, 'g'),
-    '1,5 l' → (1.5, 'l'), '75 cl' → (750.0, 'ml'); bei '6 x 1,5 l' zählt die Einzelpackung."""
-    t = _norm_text(text).replace(",", ".")
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|gr|g|ml|cl|dl|l)\b", t)
+    '1,5 l' → (1.5, 'l'), '75 cl' → (750.0, 'ml'); bei '6 x 1,5 l' zählt die Einzelpackung,
+    mit gesamt=True die ganze Packung (9 l)."""
+    t = _norm_text(text)
+    m = re.search(r"(\d+(?:[.,]\d+)*)\s*(kg|gr|g|ml|cl|dl|l)\b", t)
     if not m:
         return None
-    wert, einheit = float(m.group(1)), m.group(2)
+    einheit = m.group(2)
+    wert = _off_zahl(m.group(1), einheit)
+    if wert is None:
+        return None
     if einheit == "gr":
         einheit = "g"
     elif einheit in ("cl", "dl"):
         wert, einheit = wert * (10 if einheit == "cl" else 100), "ml"
+    if gesamt:
+        wert *= _off_stueckzahl(t, m)
     if not (0 < wert < 1_000_000):
         return None
     return round(wert, 3), einheit
@@ -1923,6 +1967,7 @@ def openfoodfacts_abrufen(barcode):
     try:
         r = requests.get(
             f"https://world.openfoodfacts.org/api/v2/product/{barcode}.json",
+            params={"fields": "product_name,product_name_de,brands,image_front_url,image_url,quantity,nutriments"},
             headers={"User-Agent": "HA-Vorratsverwaltung (github.com/jenser1/ha-vorrat-addon)"},
             timeout=(4, 10))
         r.raise_for_status()
@@ -1946,6 +1991,7 @@ def openfoodfacts_abrufen(barcode):
         "marke": (prod.get("brands") or "").split(",")[0].strip(),
         "bild_url": prod.get("image_front_url") or prod.get("image_url") or "",
         "inhalt": off_inhalt_parsen(prod.get("quantity")),
+        "inhalt_gesamt": off_inhalt_parsen(prod.get("quantity"), gesamt=True),
         "kcal": _n("energy-kcal_100g"),
         "eiweiss": _n("proteins_100g"),
         "fett": _n("fat_100g"),
@@ -2010,6 +2056,78 @@ def openfoodfacts_suche(begriff):
         return [], f"Keine Treffer für '{begriff}'."
     return treffer, None
 
+def off_bild_speichern(pid, bild_url):
+    """Lädt ein Open-Food-Facts-Bild und speichert es als Produktbild; gibt den Dateinamen zurück.
+    Wirft, wenn der Download scheitert oder die Datei kein unterstütztes Bild ist."""
+    inhalt = bild_herunterladen(bild_url)
+    ext = bild_endung(inhalt or b"")
+    if not ext:
+        raise ValueError("Kein gültiges Bild")
+    os.makedirs(BILDER_DIR, exist_ok=True)
+    dateiname = f"produkt_{pid}.{ext}"
+    with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
+        f.write(inhalt)
+    for e in ERLAUBTE_BILD_EXT:
+        if e != ext:
+            alt = os.path.join(BILDER_DIR, f"produkt_{pid}.{e}")
+            if os.path.exists(alt):
+                try: os.remove(alt)
+                except OSError: pass
+    return dateiname
+
+def barcode_varianten(code):
+    """UPC-A (12 Stellen) und EAN-13 mit führender Null sind derselbe Artikel."""
+    if len(code) == 12:
+        return [code, "0" + code]
+    if len(code) == 13 and code.startswith("0"):
+        return [code, code[1:]]
+    return [code]
+
+def scan_zubuchmenge(p, code):
+    """Vorschlag für einen Scan in der Einheit des Produkts: Packung/Stück = 1, bei g/kg/ml/l die
+    Packungsgröße aus Open Food Facts. None = unbekannt, dann trägt der Nutzer die Menge ein."""
+    if not ist_masseinheit(p.einheit):
+        return 1.0
+    daten, _ = openfoodfacts_abrufen(code)
+    inhalt = daten.get("inhalt_gesamt") if daten else None
+    if not inhalt:
+        return None
+    von, nach = einheit_basis(inhalt[1]), einheit_basis(p.einheit)
+    if not von or not nach or von[0] != nach[0]:
+        return None  # z. B. Packung in ml, Produkt in g: nicht umrechenbar
+    return round(inhalt[0] * von[1] / nach[1], 3)
+
+@app.route("/api/barcode/<code>")
+def api_barcode(code):
+    """Barcode-Scan: erst im eigenen Vorrat suchen (dann nur Menge erhöhen), sonst Open Food Facts."""
+    code = re.sub(r"\D", "", code or "")
+    if not (6 <= len(code) <= 14):
+        return jsonify({"fehler": "Ungültiger Barcode."}), 400
+    vorhanden = Produkt.query.filter(Produkt.barcode.in_(barcode_varianten(code))).first()
+    if vorhanden:
+        return jsonify({"code": code, "vorrat": {
+            "id": vorhanden.id, "name": vorhanden.name,
+            "menge": vorhanden.menge, "menge_text": zahl_de(vorhanden.menge, 3), "einheit": vorhanden.einheit,
+            "zubuchen": scan_zubuchmenge(vorhanden, code),
+            "url": url_for("produkt_detail", id=vorhanden.id)}})
+    daten, fehler = openfoodfacts_abrufen(code)
+    if fehler:
+        # Unbekannter Code ist kein Abbruch: Barcode trotzdem übernehmen, Name von Hand
+        return jsonify({"code": code, "off": None, "fehler": fehler})
+    return jsonify({"code": code, "off": daten})
+
+@app.route("/api/barcode/<int:id>/zubuchen", methods=["POST"])
+def api_barcode_zubuchen(id):
+    """Scan eines bereits vorhandenen Produkts: Menge in der Einheit des Produkts erhöhen."""
+    p = Produkt.query.get_or_404(id)
+    wert = _zahl_oder_none(request.form.get("menge"))
+    if wert is None or not (0 < wert < 1_000_000):  # schließt auch nan/inf aus
+        return jsonify({"fehler": "Bitte eine gültige Menge eingeben."}), 400
+    p.menge = round((p.menge or 0) + wert, 3)
+    db.session.commit()
+    return jsonify({"id": p.id, "name": p.name, "menge": p.menge,
+                    "menge_text": zahl_de(p.menge, 3), "einheit": p.einheit})
+
 @app.route("/produkt/<int:id>/off-suche", methods=["POST"])
 def produkt_off_suche(id):
     Produkt.query.get_or_404(id)
@@ -2041,31 +2159,7 @@ def produkt_off_import(id):
     bild_ok = True
     if daten["bild_url"]:
         try:
-            # Bild-URL stammt aus Fremddaten (Open Food Facts) -> gleicher SSRF-Schutz wie
-            # Web-Import, inkl. Prüfung jeder Weiterleitung
-            ir = _get_sicher(daten["bild_url"], timeout=(4, 12))
-            ir.raise_for_status()
-            # Größe begrenzen: MAX_CONTENT_LENGTH schützt nur Uploads, nicht diesen Download
-            angekuendigt = ir.headers.get("Content-Length")
-            if angekuendigt and int(angekuendigt) > MAX_BILD_BYTES:
-                raise ValueError("Bild zu groß")
-            inhalt = b""
-            for stueck in ir.iter_content(8192):
-                inhalt += stueck
-                if len(inhalt) > MAX_BILD_BYTES:
-                    raise ValueError("Bild zu groß")
-            m = re.search(r"\.(jpg|jpeg|png|gif|webp)(?:\.|\?|$)", daten["bild_url"], re.I)
-            ext = (m.group(1).lower() if m else "jpg")
-            dateiname = f"produkt_{id}.{ext}"
-            with open(os.path.join(BILDER_DIR, dateiname), "wb") as f:
-                f.write(inhalt)
-            for e in ERLAUBTE_BILD_EXT:
-                if e != ext:
-                    alt = os.path.join(BILDER_DIR, f"produkt_{id}.{e}")
-                    if os.path.exists(alt):
-                        try: os.remove(alt)
-                        except OSError: pass
-            p.bild = dateiname
+            p.bild = off_bild_speichern(id, daten["bild_url"])
         except Exception:
             bild_ok = False
 

@@ -8,8 +8,33 @@
     <span class="card-title">➕ Neues Produkt hinzufügen</span>
   </div>
 
+  <!-- Barcode-Scan: Kamera (BarcodeDetector/ZXing) oder Handscanner/Tastatur -->
+  <div id="scan-box" style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-bottom:18px;">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <button type="button" class="btn btn-ghost" id="scan-start">📷 Barcode scannen</button>
+      <input type="text" id="scan-code" inputmode="numeric" autocomplete="off"
+             placeholder="oder EAN eingeben / Handscanner" style="flex:1; min-width:160px;">
+      <button type="button" class="btn btn-ghost" id="scan-suchen">🔎 Suchen</button>
+      <!-- Foto-Scan: funktioniert auch über http://, wo der Browser die Live-Kamera sperrt -->
+      <input type="file" id="scan-foto" accept="image/*" capture="environment" style="display:none;">
+      <label for="scan-foto" class="btn btn-ghost" id="scan-foto-btn" style="display:none; margin:0;">📸 Foto aufnehmen</label>
+    </div>
+    <div id="scan-video-wrap" style="display:none; margin-top:10px;">
+      <video id="scan-video" playsinline muted style="width:100%; max-height:260px; border-radius:8px; background:#000;"></video>
+      <button type="button" class="btn btn-ghost" id="scan-stop" style="margin-top:6px;">✖ Kamera schließen</button>
+    </div>
+    <div id="scan-status" style="margin-top:8px; font-size:0.85rem; color:var(--muted);"></div>
+    <div id="scan-vorhanden" style="display:none; margin-top:8px;"></div>
+  </div>
+
   <!-- Nur zum Anlegen – bearbeitet wird auf der Produktseite (Klick auf den Namen) -->
   <form method="post">
+    <input type="hidden" name="barcode" id="f-barcode">
+    <input type="hidden" name="kcal" id="f-kcal">
+    <input type="hidden" name="eiweiss" id="f-eiweiss">
+    <input type="hidden" name="fett" id="f-fett">
+    <input type="hidden" name="kohlenhydrate" id="f-kohlenhydrate">
+    <input type="hidden" name="off_bild_url" id="f-bild">
     {% include "_produkt_felder.html" %}
 
     <div style="display: flex; gap: 12px; margin-top: 24px;">
@@ -18,4 +43,373 @@
     </div>
   </form>
 </div>
+
+<script>
+(function () {
+  // URLs per url_for (Ingress-Präfix!) – nie absolute Pfade
+  var API_URL = {{ url_for('api_barcode', code='CODE')|tojson }};
+  var ZUBUCHEN_URL = {{ url_for('api_barcode_zubuchen', id=0)|tojson }};
+  // Lokal mitgeliefert: im Ingress-iframe liefe ein fremdes Skript mit Zugriff auf die HA-Sitzung
+  var ZXING_URL = {{ url_for('static', filename='zxing-0.21.3.min.js')|tojson }};
+
+  var $ = function (id) { return document.getElementById(id); };
+  var stream = null, laeuft = false, zxingReader = null, zuletzt = '';
+  var kameraLauf = 0, detectorDefekt = false, abfrageNr = 0;   // veraltete async-Ergebnisse erkennen
+  var MASSEINHEITEN = {{ masseinheiten|tojson }};
+  var scanGesamt = null, scanMenge = '', mengeVonHand = false;
+
+  function status(text, fehler) {
+    var s = $('scan-status');
+    s.textContent = text || '';
+    s.style.color = fehler ? 'var(--danger, #c0392b)' : 'var(--muted)';
+  }
+  function setze(name, wert) {
+    var el = document.querySelector('[name="' + name + '"]');
+    if (el && wert !== null && wert !== undefined && wert !== '') el.value = wert;
+  }
+
+  // Antwort lesen; HTML-Fehlerseiten (z. B. abgelaufenes CSRF-Token) verständlich melden
+  async function antwortLesen(r) {
+    try {
+      return await r.json();
+    } catch (e) {
+      throw new Error(r.status === 400 ? 'Sitzung abgelaufen – bitte die Seite neu laden.'
+                                       : 'Serverfehler (' + r.status + ').');
+    }
+  }
+
+  // Bei g/kg/ml/l ist die Menge die ganze Packung. Eine von Hand eingetragene Menge bleibt stehen.
+  function mengeAusScan() {
+    if (mengeVonHand) return;
+    var feld = document.querySelector('[name="menge"]');
+    var ziel = MASSEINHEITEN[document.querySelector('[name="einheit"]').value];
+    var quelle = scanGesamt && MASSEINHEITEN[scanGesamt[1]];
+    if (ziel && quelle && ziel[0] === quelle[0]) {
+      scanMenge = String(Math.round(scanGesamt[0] * quelle[1] / ziel[1] * 1000) / 1000);
+      feld.value = scanMenge;
+    } else if (scanMenge) {
+      feld.value = '1';
+      scanMenge = '';
+    }
+  }
+
+  // ── Kamera ──
+  function stoppen() {
+    kameraLauf++;
+    laeuft = false;
+    if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
+    if (zxingReader) { try { zxingReader.reset(); } catch (e) {} zxingReader = null; }
+    $('scan-video-wrap').style.display = 'none';
+  }
+
+  function gefunden(code) {
+    if (code === zuletzt) return;       // gleiche Erkennung nicht mehrfach
+    zuletzt = code;
+    stoppen();
+    $('scan-code').value = code;
+    nachschlagen(code);
+  }
+
+  // ── Nativer Scanner der Companion-App ──
+  // Läuft über den "External Bus" des HA-Frontends (Ingress-iframe = gleiche Origin) und braucht
+  // kein HTTPS. Interne HA-Schnittstelle: fehlt sie, greifen Live-Kamera und Foto-Scan.
+  var EAN_FORMATE = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
+  var nativeBeenden = null;
+
+  function nativeApp() {
+    try {
+      var t = window.top;
+      var el = t.document.querySelector('home-assistant');
+      var ext = el && el.hass && el.hass.auth && el.hass.auth.external;
+      if (ext && ext.config && ext.config.hasBarCodeScanner && typeof t.externalBus === 'function') {
+        return { top: t, ext: ext };
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function nativeScannen(app) {
+    if (nativeBeenden) nativeBeenden(true);
+    var t = app.top, ext = app.ext, original = t.externalBus, weiche;
+
+    function beenden(scannerSchliessen) {
+      if (t.externalBus === weiche) t.externalBus = original;
+      nativeBeenden = null;
+      if (scannerSchliessen) {
+        try { ext.fireMessage({ type: 'bar_code/close' }); } catch (e) {}
+      }
+    }
+
+    // Nur Scanner-Antworten abfangen, alles andere normal ans HA-Frontend weitergeben
+    weiche = function (msg) {
+      var cmd = msg && msg.type === 'command' ? msg.command : '';
+      if (cmd !== 'bar_code/scan_result' && cmd !== 'bar_code/aborted') return original(msg);
+      ext.fireMessage({ id: msg.id, type: 'result', success: true, result: null });
+      if (cmd === 'bar_code/aborted') {
+        beenden(false);
+        if (msg.payload && msg.payload.reason === 'alternative_options') $('scan-code').focus();
+        status('');
+        return;
+      }
+      var wert = String((msg.payload && msg.payload.rawValue) || '');
+      if (EAN_FORMATE.indexOf(msg.payload && msg.payload.format) < 0 || !/^\d{6,14}$/.test(wert)) {
+        // Scanner bleibt offen, z. B. wenn versehentlich ein QR-Code erfasst wurde
+        ext.fireMessage({ type: 'bar_code/notify', payload: { message: 'Das ist kein Produkt-Barcode (EAN).' } });
+        return;
+      }
+      beenden(true);
+      zuletzt = '';
+      gefunden(wert);
+    };
+
+    t.externalBus = weiche;
+    nativeBeenden = beenden;
+    try {
+      ext.fireMessage({ type: 'bar_code/scan', payload: {
+        title: 'Barcode scannen',
+        description: 'Barcode des Produkts in den Rahmen halten',
+        alternative_option_label: 'EAN eintippen'
+      } });
+      status('Scanner der App ist geöffnet …');
+      return true;
+    } catch (e) {
+      beenden(false);
+      return false;
+    }
+  }
+
+  async function kameraStarten() {
+    var app = nativeApp();
+    if (app && nativeScannen(app)) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.isSecureContext) {
+      // Ohne HTTPS gibt es keine Live-Kamera: stattdessen Foto aufnehmen (direkt im Klick auslösen)
+      $('scan-foto').click();
+      return;
+    }
+    stoppen();                  // auch einen noch laufenden Start beenden
+    var lauf = kameraLauf;
+    zuletzt = '';
+    $('scan-video-wrap').style.display = '';
+    status('Kamera wird gestartet …');
+    try {
+      if ('BarcodeDetector' in window && !detectorDefekt) {
+        var det = new BarcodeDetector({ formats: EAN_FORMATE });
+        var neu = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (lauf !== kameraLauf) { neu.getTracks().forEach(function (t) { t.stop(); }); return; }
+        stream = neu;
+        var v = $('scan-video');
+        v.srcObject = stream;
+        await v.play();
+        if (lauf !== kameraLauf) return;
+        laeuft = true;
+        status('Barcode in den Bildausschnitt halten …');
+        (async function schleife() {
+          var fehler = 0;
+          while (laeuft && lauf === kameraLauf) {
+            try {
+              var res = await det.detect(v);
+              fehler = 0;
+              if (lauf === kameraLauf && res.length) { gefunden(res[0].rawValue); return; }
+            } catch (e) {
+              // Erkennungsdienst fehlt auf manchen Geräten: auf ZXing wechseln
+              if (++fehler >= 10 && lauf === kameraLauf) { detectorDefekt = true; kameraStarten(); return; }
+            }
+            await new Promise(function (r) { setTimeout(r, 200); });
+          }
+        })();
+      } else {
+        // Fallback (z. B. iOS/Firefox): ZXing erst bei Bedarf nachladen
+        await zxingLaden();
+        if (lauf !== kameraLauf) return;
+        var reader = new ZXing.BrowserMultiFormatReader();
+        zxingReader = reader;
+        laeuft = true;
+        await reader.decodeFromVideoDevice(null, 'scan-video', function (res) {
+          if (res && laeuft && lauf === kameraLauf) gefunden(res.getText());
+        });
+        if (lauf !== kameraLauf) { try { reader.reset(); } catch (e) {} return; }
+        status('Barcode in den Bildausschnitt halten …');
+      }
+    } catch (e) {
+      if (lauf !== kameraLauf) return;
+      stoppen();
+      $('scan-foto-btn').style.display = '';
+      status('Live-Kamera nicht möglich (' + (e && e.message ? e.message : e) + '). Bitte „Foto aufnehmen“ nutzen.', true);
+    }
+  }
+
+  function zxingLaden() {
+    if (window.ZXing) return Promise.resolve();
+    return new Promise(function (ok, fail) {
+      var s = document.createElement('script');
+      s.src = ZXING_URL; s.onload = ok;
+      s.onerror = function () { fail(new Error('Scanner-Bibliothek nicht ladbar')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // ── Foto-Scan ──
+  async function fotoLesen(datei) {
+    status('Foto wird gelesen …');
+    var url = URL.createObjectURL(datei);
+    try {
+      await zxingLaden();
+      var bild = new Image();
+      await new Promise(function (ok, fail) { bild.onload = ok; bild.onerror = function () { fail(new Error('Die Datei ist kein lesbares Bild.')); }; bild.src = url; });
+      var hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+                                                        ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      var reader = new ZXing.BrowserMultiFormatReader(hints);
+      // Handyfotos sind groß: mehrere Stufen probieren, kleinere lesen sich oft besser und schneller
+      var groesste = Math.max(bild.naturalWidth, bild.naturalHeight);
+      var stufen = [1600, 1000, 2400].filter(function (s) { return s <= groesste; });
+      if (!stufen.length) stufen = [groesste];
+      for (var i = 0; i < stufen.length; i++) {
+        var f = stufen[i] / groesste;
+        var c = document.createElement('canvas');
+        c.width = Math.round(bild.naturalWidth * f); c.height = Math.round(bild.naturalHeight * f);
+        c.getContext('2d').drawImage(bild, 0, 0, c.width, c.height);
+        try {
+          var res = await reader.decodeFromImageUrl(c.toDataURL('image/jpeg', 0.92));
+          zuletzt = '';
+          gefunden(res.getText());
+          return;
+        } catch (e) {
+          if (!(e instanceof ZXing.NotFoundException) && !(e && e.name === 'NotFoundException')) throw e;
+        }
+      }
+      status('Kein Barcode erkannt. Bitte näher und scharf fotografieren, Barcode möglichst bildfüllend.', true);
+    } catch (e) {
+      status('Foto konnte nicht gelesen werden: ' + (e && e.message ? e.message : e), true);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  // Werte des vorigen Scans entfernen, damit sie nicht beim nächsten Produkt landen.
+  // Von Hand geänderte Felder bleiben stehen.
+  var scanName = '', scanInhalt = '';
+  function scanZuruecksetzen() {
+    ['f-barcode', 'f-kcal', 'f-eiweiss', 'f-fett', 'f-kohlenhydrate', 'f-bild'].forEach(function (id) {
+      $(id).value = '';
+    });
+    var n = document.querySelector('[name="name"]'), i = document.querySelector('[name="inhalt"]');
+    if (n && scanName && n.value === scanName) n.value = '';
+    if (i && scanInhalt && i.value === scanInhalt) i.value = '';
+    scanName = ''; scanInhalt = '';
+    scanGesamt = null;
+    mengeAusScan();
+  }
+
+  // ── Nachschlagen ──
+  async function nachschlagen(code) {
+    var nr = ++abfrageNr;       // nur die neueste Abfrage darf das Formular füllen
+    code = (code || '').replace(/\D/g, '');
+    $('scan-vorhanden').style.display = 'none';
+    if (code.length < 6) { status('Bitte einen gültigen Barcode eingeben.', true); return; }
+    scanZuruecksetzen();
+    status('Suche ' + code + ' …');
+    try {
+      var r = await fetch(API_URL.replace(/CODE$/, code));
+      var d = await antwortLesen(r);
+      if (nr !== abfrageNr) return;
+      if (!r.ok) { status(d.fehler || 'Fehler', true); return; }
+
+      if (d.vorrat) {
+        status('');
+        var box = $('scan-vorhanden');
+        box.style.display = '';
+        box.innerHTML = '';
+        var info = document.createElement('div');
+        info.textContent = '✔ Schon im Vorrat: ' + d.vorrat.name + ' (' + d.vorrat.menge_text + ' ' + d.vorrat.einheit + ')';
+        // Menge vorbelegt (Packung = 1, g/ml = Packungsgröße), bleibt aber änderbar
+        var zeile = document.createElement('div');
+        zeile.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;';
+        var mengeFeld = document.createElement('input');
+        mengeFeld.type = 'number'; mengeFeld.id = 'scan-zubuchen-menge';
+        mengeFeld.step = 'any'; mengeFeld.min = '0'; mengeFeld.style.cssText = 'width:110px; flex:none;';
+        mengeFeld.setAttribute('aria-label', 'Menge zum Zubuchen');
+        if (d.vorrat.zubuchen != null) mengeFeld.value = d.vorrat.zubuchen;
+        else mengeFeld.placeholder = 'Menge';
+        var einheit = document.createElement('span');
+        einheit.textContent = d.vorrat.einheit;
+        var plus = document.createElement('button');
+        plus.type = 'button'; plus.className = 'btn btn-primary'; plus.textContent = '➕ Zubuchen';
+        plus.onclick = async function () {
+          var wert = parseFloat(mengeFeld.value);
+          if (!(wert > 0)) { status('Bitte die Menge zum Zubuchen eingeben.', true); mengeFeld.focus(); return; }
+          plus.disabled = true;
+          try {
+            var rr = await fetch(ZUBUCHEN_URL.replace(/\/0\/zubuchen$/, '/' + d.vorrat.id + '/zubuchen'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': timerCsrf() },
+              body: 'menge=' + encodeURIComponent(wert) });
+            var j = await antwortLesen(rr);
+            if (!rr.ok) throw new Error(j.fehler || 'Fehler');
+            status('');
+            info.textContent = '✔ ' + j.name + ': jetzt ' + j.menge_text + ' ' + j.einheit;
+            zeile.remove();
+            $('scan-code').value = ''; zuletzt = '';
+          } catch (e) {
+            status('Zubuchen fehlgeschlagen: ' + (e && e.message ? e.message : e), true);
+            plus.disabled = false;
+          }
+        };
+        var link = document.createElement('a');
+        link.href = d.vorrat.url; link.textContent = 'Produkt öffnen';
+        zeile.appendChild(mengeFeld); zeile.appendChild(einheit); zeile.appendChild(plus);
+        box.appendChild(info); box.appendChild(zeile); box.appendChild(link);
+        return;
+      }
+
+      $('f-barcode').value = d.code;
+      if (!d.off) {
+        status((d.fehler || 'Nicht gefunden.') + ' Name bitte von Hand eintragen – der Barcode wird mitgespeichert.', true);
+        return;
+      }
+      var o = d.off;
+      var name = (o.marke && o.name && o.name.toLowerCase().indexOf(o.marke.toLowerCase()) < 0)
+                   ? o.name + ' (' + o.marke + ')' : o.name;
+      if (name) {
+        setze('name', name);
+        scanName = document.querySelector('[name="name"]').value;
+      }
+      if (o.inhalt) {
+        setze('inhalt', o.inhalt[0]); setze('inhalt_einheit', o.inhalt[1]);
+        scanInhalt = document.querySelector('[name="inhalt"]').value;
+      }
+      scanGesamt = o.inhalt_gesamt || null;
+      mengeAusScan();
+      ['kcal', 'eiweiss', 'fett', 'kohlenhydrate'].forEach(function (k) { setze(k, o[k]); });
+      setze('off_bild_url', o.bild_url);
+      status('✔ ' + (o.name || d.code) + ' übernommen – bitte Menge, Lagerort und MHD prüfen.');
+      var m = document.querySelector('[name="mhd"]'); if (m) m.focus();
+    } catch (e) {
+      if (nr !== abfrageNr) return;
+      status('Abfrage fehlgeschlagen: ' + (e && e.message ? e.message : e), true);
+    }
+  }
+
+  if (!window.isSecureContext && !nativeApp()) $('scan-start').textContent = '📸 Barcode fotografieren';
+  $('scan-foto').addEventListener('change', function () {
+    var datei = this.files && this.files[0];
+    this.value = '';        // gleiches Foto/nächster Scan löst wieder "change" aus
+    if (datei) fotoLesen(datei);
+  });
+  document.querySelector('[name="einheit"]').addEventListener('change', mengeAusScan);
+  document.querySelector('[name="menge"]').addEventListener('input', function () { mengeVonHand = true; });
+  $('scan-start').onclick = kameraStarten;
+  $('scan-stop').onclick = function () { stoppen(); status(''); };
+  $('scan-suchen').onclick = function () { nachschlagen($('scan-code').value); };
+  // Handscanner senden Ziffern + Enter: nicht das Formular abschicken
+  $('scan-code').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); nachschlagen(this.value); }
+  });
+  window.addEventListener('pagehide', function () {
+    stoppen();
+    if (nativeBeenden) nativeBeenden(true);
+  });
+})();
+</script>
 {% endblock %}

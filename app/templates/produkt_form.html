@@ -49,27 +49,53 @@
   // URLs per url_for (Ingress-Präfix!) – nie absolute Pfade
   var API_URL = {{ url_for('api_barcode', code='CODE')|tojson }};
   var ZUBUCHEN_URL = {{ url_for('api_barcode_zubuchen', id=0)|tojson }};
-  var ZXING_CDN = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+  // Lokal mitgeliefert: im Ingress-iframe liefe ein fremdes Skript mit Zugriff auf die HA-Sitzung
+  var ZXING_URL = {{ url_for('static', filename='zxing-0.21.3.min.js')|tojson }};
 
   var $ = function (id) { return document.getElementById(id); };
   var stream = null, laeuft = false, zxingReader = null, zuletzt = '';
+  var kameraLauf = 0, detectorDefekt = false, abfrageNr = 0;   // veraltete async-Ergebnisse erkennen
+  var MASSEINHEITEN = {{ masseinheiten|tojson }};
+  var scanGesamt = null, scanMenge = '', mengeVonHand = false;
 
   function status(text, fehler) {
     var s = $('scan-status');
     s.textContent = text || '';
     s.style.color = fehler ? 'var(--danger, #c0392b)' : 'var(--muted)';
   }
-  function csrf() {
-    var m = document.querySelector('meta[name="csrf-token"]');
-    return m ? m.getAttribute('content') : '';
-  }
   function setze(name, wert) {
     var el = document.querySelector('[name="' + name + '"]');
     if (el && wert !== null && wert !== undefined && wert !== '') el.value = wert;
   }
 
+  // Antwort lesen; HTML-Fehlerseiten (z. B. abgelaufenes CSRF-Token) verständlich melden
+  async function antwortLesen(r) {
+    try {
+      return await r.json();
+    } catch (e) {
+      throw new Error(r.status === 400 ? 'Sitzung abgelaufen – bitte die Seite neu laden.'
+                                       : 'Serverfehler (' + r.status + ').');
+    }
+  }
+
+  // Bei g/kg/ml/l ist die Menge die ganze Packung. Eine von Hand eingetragene Menge bleibt stehen.
+  function mengeAusScan() {
+    if (mengeVonHand) return;
+    var feld = document.querySelector('[name="menge"]');
+    var ziel = MASSEINHEITEN[document.querySelector('[name="einheit"]').value];
+    var quelle = scanGesamt && MASSEINHEITEN[scanGesamt[1]];
+    if (ziel && quelle && ziel[0] === quelle[0]) {
+      scanMenge = String(Math.round(scanGesamt[0] * quelle[1] / ziel[1] * 1000) / 1000);
+      feld.value = scanMenge;
+    } else if (scanMenge) {
+      feld.value = '1';
+      scanMenge = '';
+    }
+  }
+
   // ── Kamera ──
   function stoppen() {
+    kameraLauf++;
     laeuft = false;
     if (stream) { stream.getTracks().forEach(function (t) { t.stop(); }); stream = null; }
     if (zxingReader) { try { zxingReader.reset(); } catch (e) {} zxingReader = null; }
@@ -160,38 +186,52 @@
       $('scan-foto').click();
       return;
     }
+    stoppen();                  // auch einen noch laufenden Start beenden
+    var lauf = kameraLauf;
     zuletzt = '';
     $('scan-video-wrap').style.display = '';
     status('Kamera wird gestartet …');
     try {
-      if ('BarcodeDetector' in window) {
-        var det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      if ('BarcodeDetector' in window && !detectorDefekt) {
+        var det = new BarcodeDetector({ formats: EAN_FORMATE });
+        var neu = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (lauf !== kameraLauf) { neu.getTracks().forEach(function (t) { t.stop(); }); return; }
+        stream = neu;
         var v = $('scan-video');
         v.srcObject = stream;
         await v.play();
+        if (lauf !== kameraLauf) return;
         laeuft = true;
         status('Barcode in den Bildausschnitt halten …');
         (async function schleife() {
-          while (laeuft) {
+          var fehler = 0;
+          while (laeuft && lauf === kameraLauf) {
             try {
               var res = await det.detect(v);
-              if (res.length) { gefunden(res[0].rawValue); return; }
-            } catch (e) {}
+              fehler = 0;
+              if (lauf === kameraLauf && res.length) { gefunden(res[0].rawValue); return; }
+            } catch (e) {
+              // Erkennungsdienst fehlt auf manchen Geräten: auf ZXing wechseln
+              if (++fehler >= 10 && lauf === kameraLauf) { detectorDefekt = true; kameraStarten(); return; }
+            }
             await new Promise(function (r) { setTimeout(r, 200); });
           }
         })();
       } else {
         // Fallback (z. B. iOS/Firefox): ZXing erst bei Bedarf nachladen
         await zxingLaden();
-        zxingReader = new ZXing.BrowserMultiFormatReader();
+        if (lauf !== kameraLauf) return;
+        var reader = new ZXing.BrowserMultiFormatReader();
+        zxingReader = reader;
         laeuft = true;
-        status('Barcode in den Bildausschnitt halten …');
-        zxingReader.decodeFromVideoDevice(null, 'scan-video', function (res) {
-          if (res && laeuft) gefunden(res.getText());
+        await reader.decodeFromVideoDevice(null, 'scan-video', function (res) {
+          if (res && laeuft && lauf === kameraLauf) gefunden(res.getText());
         });
+        if (lauf !== kameraLauf) { try { reader.reset(); } catch (e) {} return; }
+        status('Barcode in den Bildausschnitt halten …');
       }
     } catch (e) {
+      if (lauf !== kameraLauf) return;
       stoppen();
       $('scan-foto-btn').style.display = '';
       status('Live-Kamera nicht möglich (' + (e && e.message ? e.message : e) + '). Bitte „Foto aufnehmen“ nutzen.', true);
@@ -202,8 +242,8 @@
     if (window.ZXing) return Promise.resolve();
     return new Promise(function (ok, fail) {
       var s = document.createElement('script');
-      s.src = ZXING_CDN; s.onload = ok;
-      s.onerror = function () { fail(new Error('Scanner-Bibliothek nicht ladbar (Internet?)')); };
+      s.src = ZXING_URL; s.onload = ok;
+      s.onerror = function () { fail(new Error('Scanner-Bibliothek nicht ladbar')); };
       document.head.appendChild(s);
     });
   }
@@ -215,7 +255,7 @@
     try {
       await zxingLaden();
       var bild = new Image();
-      await new Promise(function (ok, fail) { bild.onload = ok; bild.onerror = fail; bild.src = url; });
+      await new Promise(function (ok, fail) { bild.onload = ok; bild.onerror = function () { fail(new Error('Die Datei ist kein lesbares Bild.')); }; bild.src = url; });
       var hints = new Map();
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
                                                         ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E]);
@@ -258,18 +298,22 @@
     if (n && scanName && n.value === scanName) n.value = '';
     if (i && scanInhalt && i.value === scanInhalt) i.value = '';
     scanName = ''; scanInhalt = '';
+    scanGesamt = null;
+    mengeAusScan();
   }
 
   // ── Nachschlagen ──
   async function nachschlagen(code) {
+    var nr = ++abfrageNr;       // nur die neueste Abfrage darf das Formular füllen
     code = (code || '').replace(/\D/g, '');
     $('scan-vorhanden').style.display = 'none';
     if (code.length < 6) { status('Bitte einen gültigen Barcode eingeben.', true); return; }
     scanZuruecksetzen();
     status('Suche ' + code + ' …');
     try {
-      var r = await fetch(API_URL.replace('CODE', code));
-      var d = await r.json();
+      var r = await fetch(API_URL.replace(/CODE$/, code));
+      var d = await antwortLesen(r);
+      if (nr !== abfrageNr) return;
       if (!r.ok) { status(d.fehler || 'Fehler', true); return; }
 
       if (d.vorrat) {
@@ -278,7 +322,7 @@
         box.style.display = '';
         box.innerHTML = '';
         var info = document.createElement('div');
-        info.textContent = '✔ Schon im Vorrat: ' + d.vorrat.name + ' (' + d.vorrat.menge + ' ' + d.vorrat.einheit + ')';
+        info.textContent = '✔ Schon im Vorrat: ' + d.vorrat.name + ' (' + d.vorrat.menge_text + ' ' + d.vorrat.einheit + ')';
         // Menge vorbelegt (Packung = 1, g/ml = Packungsgröße), bleibt aber änderbar
         var zeile = document.createElement('div');
         zeile.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:6px;';
@@ -297,14 +341,14 @@
           if (!(wert > 0)) { status('Bitte die Menge zum Zubuchen eingeben.', true); mengeFeld.focus(); return; }
           plus.disabled = true;
           try {
-            var rr = await fetch(ZUBUCHEN_URL.replace('/0/', '/' + d.vorrat.id + '/'), {
+            var rr = await fetch(ZUBUCHEN_URL.replace(/\/0\/zubuchen$/, '/' + d.vorrat.id + '/zubuchen'), {
               method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': csrf() },
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-Token': timerCsrf() },
               body: 'menge=' + encodeURIComponent(wert) });
-            var j = await rr.json();
+            var j = await antwortLesen(rr);
             if (!rr.ok) throw new Error(j.fehler || 'Fehler');
             status('');
-            info.textContent = '✔ ' + j.name + ': jetzt ' + String(j.menge).replace('.', ',') + ' ' + j.einheit;
+            info.textContent = '✔ ' + j.name + ': jetzt ' + j.menge_text + ' ' + j.einheit;
             zeile.remove();
             $('scan-code').value = ''; zuletzt = '';
           } catch (e) {
@@ -325,22 +369,25 @@
         return;
       }
       var o = d.off;
-      setze('name', (o.marke && o.name && o.name.toLowerCase().indexOf(o.marke.toLowerCase()) < 0)
-                      ? o.name + ' (' + o.marke + ')' : o.name);
-      scanName = document.querySelector('[name="name"]').value;
+      var name = (o.marke && o.name && o.name.toLowerCase().indexOf(o.marke.toLowerCase()) < 0)
+                   ? o.name + ' (' + o.marke + ')' : o.name;
+      if (name) {
+        setze('name', name);
+        scanName = document.querySelector('[name="name"]').value;
+      }
       if (o.inhalt) {
         setze('inhalt', o.inhalt[0]); setze('inhalt_einheit', o.inhalt[1]);
         scanInhalt = document.querySelector('[name="inhalt"]').value;
       }
-      $('f-kcal').value = o.kcal != null ? o.kcal : '';
-      $('f-eiweiss').value = o.eiweiss != null ? o.eiweiss : '';
-      $('f-fett').value = o.fett != null ? o.fett : '';
-      $('f-kohlenhydrate').value = o.kohlenhydrate != null ? o.kohlenhydrate : '';
-      $('f-bild').value = o.bild_url || '';
+      scanGesamt = o.inhalt_gesamt || null;
+      mengeAusScan();
+      ['kcal', 'eiweiss', 'fett', 'kohlenhydrate'].forEach(function (k) { setze(k, o[k]); });
+      setze('off_bild_url', o.bild_url);
       status('✔ ' + (o.name || d.code) + ' übernommen – bitte Menge, Lagerort und MHD prüfen.');
       var m = document.querySelector('[name="mhd"]'); if (m) m.focus();
     } catch (e) {
-      status('Abfrage fehlgeschlagen: ' + e, true);
+      if (nr !== abfrageNr) return;
+      status('Abfrage fehlgeschlagen: ' + (e && e.message ? e.message : e), true);
     }
   }
 
@@ -350,6 +397,8 @@
     this.value = '';        // gleiches Foto/nächster Scan löst wieder "change" aus
     if (datei) fotoLesen(datei);
   });
+  document.querySelector('[name="einheit"]').addEventListener('change', mengeAusScan);
+  document.querySelector('[name="menge"]').addEventListener('input', function () { mengeVonHand = true; });
   $('scan-start').onclick = kameraStarten;
   $('scan-stop').onclick = function () { stoppen(); status(''); };
   $('scan-suchen').onclick = function () { nachschlagen($('scan-code').value); };
